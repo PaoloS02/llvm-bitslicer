@@ -63,6 +63,14 @@ namespace{
 			for(BasicBlock& B : F){
 				for(Instruction& I : B){
 					IRBuilder<> builder(&I);
+					if(auto *call = dyn_cast<CallInst>(&I)){
+						Function *funn = call->getCalledFunction();
+						errs() << "args: \n" << call->getNumArgOperands() << "\n";
+						if(funn->isIntrinsic()){
+							funn->getAttributes().dump();
+							errs() << "ok\n";
+						}
+					}
 					if(I.getMetadata("bitsliced")){
 						
 						for(auto& U : I.uses()){
