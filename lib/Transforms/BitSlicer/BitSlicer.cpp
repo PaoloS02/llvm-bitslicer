@@ -21,6 +21,7 @@
 									//of the array.
 
 #define SENSIBLE_DATA_BYTES 1		//size in bits of the sensible data to be bitsliced in the program
+#define BLOCK_LEN	8
 
 using namespace llvm;
 /*
@@ -64,11 +65,36 @@ namespace{
 				for(Instruction& I : B){
 					IRBuilder<> builder(&I);
 					if(auto *call = dyn_cast<CallInst>(&I)){
-						Function *funn = call->getCalledFunction();
-						errs() << "args: \n" << call->getNumArgOperands() << "\n";
-						if(funn->isIntrinsic()){
-							funn->getAttributes().dump();
-							errs() << "ok\n";
+						Function *Fn = call->getCalledFunction();
+						if(Fn && Fn->getIntrinsicID() == Intrinsic::bitslice_i32){
+					//		errs() << "args: \n" << call->getNumArgOperands() << "\n";
+							if(auto *IntrPtr = dyn_cast<GetElementPtrInst>(call->getArgOperand(0))){
+								if(auto *BlockPtrType = dyn_cast<PointerType>(IntrPtr->getSourceElementType()->getArrayElementType())){
+									if(!BlockPtrType->getElementType()->isIntegerTy(8))
+										errs() << "Not uint8_t!\n";
+								}
+								AllocaInst *ret;
+							//	MDNode *MData = MDNode::get(call->getContext(), 
+							//							MDString::get(call->getContext(), "bitsliced"));
+								Type *sliceTy = IntegerType::getInt32Ty(I.getModule()->getContext());
+							//	Value *elemSize = ConstantInt::get(sliceTy,8);
+							//	Value *ortLen = builder.CreateMul(elemSize, call->getArgOperand(2));
+								ArrayType *arrTy;
+								arrTy = ArrayType::get(sliceTy, BLOCK_LEN*8);
+								ret = builder.CreateAlloca(arrTy, 0, "SLICED");
+								
+								std::vector<Value *> IdxList;
+								Type *idxTy = IntegerType::getInt64Ty(I.getModule()->getContext());
+								Value *init = ConstantInt::get(idxTy, 0);
+								IdxList.push_back(init);
+								IdxList.push_back(init);
+								Value *newPtr = builder.CreateInBoundsGEP(ret, ArrayRef <Value *>(IdxList));
+								
+								//newPtr->setMetadata("bit-sliced", MData);
+								
+								call->replaceAllUsesWith(newPtr);
+								done = 1;
+							}
 						}
 					}
 					if(I.getMetadata("bitsliced")){

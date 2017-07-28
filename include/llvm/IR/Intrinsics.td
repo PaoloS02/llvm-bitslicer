@@ -732,9 +732,11 @@ def int_convert_from_fp16 : Intrinsic<[llvm_anyfloat_ty], [llvm_i16_ty]>;
 def int_clear_cache : Intrinsic<[], [llvm_ptr_ty, llvm_ptr_ty],
                                 [], "llvm.clear_cache">;
 
-def int_bitsliced_bit : GCCBuiltin<"__builtin_i8_bit">,
-  	Intrinsic<[llvm_ptr_ty], [llvm_i8_ty, llvm_i32_ty], []>;
+def int_bitsliced_i8_bit : GCCBuiltin<"__builtin_i8_bit">,
+  	Intrinsic<[llvm_i8_ty], [llvm_i8_ty, llvm_i32_ty], []>;
 
+def int_bitslice_i32 : GCCBuiltin<"__builtin_i32_bitslice">,
+	Intrinsic<[LLVMPointerType<llvm_i32_ty>], [llvm_ptrptr_ty, llvm_i32_ty]>;
 
 //===-------------------------- Masked Intrinsics -------------------------===//
 //
