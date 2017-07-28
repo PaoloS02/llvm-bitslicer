@@ -24,6 +24,78 @@
 #define BLOCK_LEN	8
 
 using namespace llvm;
+
+
+bool bitSlice(CallInst *call, LLVMContext &Context){
+	IRBuilder<> builder(call);
+	if(auto *IntrPtr = dyn_cast<GetElementPtrInst>(call->getArgOperand(0))){
+		if( auto *BlockPtrType = dyn_cast<PointerType>(IntrPtr->getSourceElementType()
+													   ->getArrayElementType()) )
+		{
+			if(!BlockPtrType->getElementType()->isIntegerTy(8)){
+				errs() << "Not uint8_t!\n";
+				return false;
+			}
+		}
+	}
+	
+	AllocaInst *ret;
+	//	MDNode *MData = MDNode::get(Context, 
+	//							MDString::get(Context, "bitsliced"));
+	Type *sliceTy = IntegerType::getInt32Ty(Context);
+	//	Value *elemSize = ConstantInt::get(sliceTy,8);
+	//	Value *ortLen = builder.CreateMul(elemSize, call->getArgOperand(2));
+	ArrayType *arrTy;
+	arrTy = ArrayType::get(sliceTy, BLOCK_LEN*8);
+	ret = builder.CreateAlloca(arrTy, 0, "SLICED");
+
+	std::vector<Value *> IdxList;
+	Type *idxTy = IntegerType::getInt64Ty(Context);
+	Value *idxZero = ConstantInt::get(idxTy, 0);
+	IdxList.push_back(idxZero);
+	IdxList.push_back(idxZero);
+	Value *newPtr = builder.CreateInBoundsGEP(ret, ArrayRef <Value *>(IdxList));
+
+	//newPtr->setMetadata("bit-sliced", MData);
+	call->replaceAllUsesWith(newPtr);
+	int i, j;
+	Value *sliceAddr;
+	Value *oldAddr = cast<GetElementPtrInst>(call->getArgOperand(0))->getPointerOperand();
+	Value *tmp;
+	Value *bitVal;
+	Value *Block;
+	Value *BlockElem;
+	//Value *idx2 = ConstantInt::get(idxTy, 0);
+	
+	for( i = 0; i < BLOCK_LEN*8; i++ ){
+		IdxList.at(0) = idxZero;
+		IdxList.at(1) = ConstantInt::get(idxTy, i);
+		sliceAddr = builder.CreateGEP(ret, ArrayRef <Value *>(IdxList), "sliceAddr");
+		tmp = ConstantInt::get(sliceTy, 0);
+		
+		for( j = 0; j < 32; j++){
+			IdxList.at(0) = idxZero;
+			IdxList.at(1) = ConstantInt::get(idxTy, j);
+			Block = builder.CreateGEP(oldAddr, ArrayRef <Value *>(IdxList), "Block");
+			Block = builder.CreateLoad(Block);
+			IdxList.pop_back();
+			IdxList.at(0) = ConstantInt::get(idxTy, i/8);
+			BlockElem = builder.CreateGEP(Block, ArrayRef <Value *>(IdxList), "BlockElem");
+			bitVal = builder.CreateLoad(BlockElem);
+	//		bitVal->getType()->dump();
+			bitVal = builder.CreateZExt(bitVal, sliceTy);
+			bitVal = builder.CreateLShr(bitVal, ConstantInt::get(sliceTy, i%8));
+			bitVal = builder.CreateAnd(bitVal, ConstantInt::get(sliceTy, 1));
+			bitVal = builder.CreateShl(bitVal, ConstantInt::get(sliceTy, j));
+			tmp = builder.CreateOr(tmp, bitVal);
+			IdxList.push_back(idxZero);
+		}
+//		sliceAddr->getType()->dump();
+		builder.CreateStore(tmp, sliceAddr);
+	}
+	
+	return true;
+}
 /*
 int searchInstByName(std::vector<StringRef> nameVector, StringRef name){
 	int i = 0;
@@ -68,35 +140,15 @@ namespace{
 						Function *Fn = call->getCalledFunction();
 						if(Fn && Fn->getIntrinsicID() == Intrinsic::bitslice_i32){
 					//		errs() << "args: \n" << call->getNumArgOperands() << "\n";
-							if(auto *IntrPtr = dyn_cast<GetElementPtrInst>(call->getArgOperand(0))){
-								if(auto *BlockPtrType = dyn_cast<PointerType>(IntrPtr->getSourceElementType()->getArrayElementType())){
-									if(!BlockPtrType->getElementType()->isIntegerTy(8))
-										errs() << "Not uint8_t!\n";
+							
+							if(!bitSlice(call, I.getModule()->getContext())){
+								errs() << "bitslicing failed\n";
 								}
-								AllocaInst *ret;
-							//	MDNode *MData = MDNode::get(call->getContext(), 
-							//							MDString::get(call->getContext(), "bitsliced"));
-								Type *sliceTy = IntegerType::getInt32Ty(I.getModule()->getContext());
-							//	Value *elemSize = ConstantInt::get(sliceTy,8);
-							//	Value *ortLen = builder.CreateMul(elemSize, call->getArgOperand(2));
-								ArrayType *arrTy;
-								arrTy = ArrayType::get(sliceTy, BLOCK_LEN*8);
-								ret = builder.CreateAlloca(arrTy, 0, "SLICED");
-								
-								std::vector<Value *> IdxList;
-								Type *idxTy = IntegerType::getInt64Ty(I.getModule()->getContext());
-								Value *init = ConstantInt::get(idxTy, 0);
-								IdxList.push_back(init);
-								IdxList.push_back(init);
-								Value *newPtr = builder.CreateInBoundsGEP(ret, ArrayRef <Value *>(IdxList));
-								
-								//newPtr->setMetadata("bit-sliced", MData);
-								
-								call->replaceAllUsesWith(newPtr);
-								done = 1;
-							}
+							eraseList.push_back(&I);
+							done = 1;
 						}
 					}
+					
 					if(I.getMetadata("bitsliced")){
 						
 						for(auto& U : I.uses()){
