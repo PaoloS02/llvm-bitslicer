@@ -26,7 +26,7 @@
 using namespace llvm;
 
 
-bool bitSlice(CallInst *call, LLVMContext &Context){
+bool BitSlice(CallInst *call, LLVMContext &Context){
 	IRBuilder<> builder(call);
 	if(auto *IntrPtr = dyn_cast<GetElementPtrInst>(call->getArgOperand(0))){
 		if( auto *BlockPtrType = dyn_cast<PointerType>(IntrPtr->getSourceElementType()
@@ -54,7 +54,7 @@ bool bitSlice(CallInst *call, LLVMContext &Context){
 	Value *idxZero = ConstantInt::get(idxTy, 0);
 	IdxList.push_back(idxZero);
 	IdxList.push_back(idxZero);
-	Value *newPtr = builder.CreateInBoundsGEP(ret, ArrayRef <Value *>(IdxList));
+	Value *newPtr = builder.CreateGEP(ret, ArrayRef <Value *>(IdxList), "EXCALL");
 
 	//newPtr->setMetadata("bit-sliced", MData);
 	call->replaceAllUsesWith(newPtr);
@@ -96,6 +96,89 @@ bool bitSlice(CallInst *call, LLVMContext &Context){
 	
 	return true;
 }
+
+
+bool UnBitSlice(CallInst *call, LLVMContext &Context){
+	IRBuilder<> builder(call);
+	int i, j, k;
+	AllocaInst *ret, *newBlock;
+	Value *newBlockAddr, *newBlockElemAddr, *ptrArrayElem, *sliceAddr;
+	ArrayType *arrTy, *ptrArrayTy;
+	Type *byteTy = IntegerType::getInt8Ty(Context);
+	PointerType *bytePtrTy = PointerType::getUnqual(byteTy);
+	ptrArrayTy = ArrayType::get(bytePtrTy, 32);
+	arrTy = ArrayType::get(byteTy, BLOCK_LEN);
+	
+	ret = builder.CreateAlloca(ptrArrayTy, 0, "UNSLICE");
+	
+	
+	std::vector<Value *> IdxList;
+	Type *idxTy = IntegerType::getInt64Ty(Context);
+	Value *idxZero = ConstantInt::get(idxTy, 0);
+	IdxList.push_back(idxZero);
+	IdxList.push_back(idxZero);
+	
+	Value *newPtr = builder.CreateGEP(ret, ArrayRef <Value *>(IdxList), "UNSLICED");
+	call->replaceAllUsesWith(newPtr);
+	
+	Value *bitVal, *tmp;
+	Type *sliceTy = IntegerType::getInt32Ty(Context);
+//	Value *sliceArr;
+//	Value *ptrInst;
+	
+	//auto *ptrInst = dyn_cast<Instruction>(call->getArgOperand(0));
+//	if(auto *sliceAddr = dyn_cast<Value>(call->getArgOperand(0)->getPointerOperand()->getPointerOperand())){
+		//ptrInst = cast<GetElementPtrInst>(call->getArgOperand(0));
+	//	sliceArr = cast<GetElementPtrInst>(call->getArgOperand(0))->getPointerOperand();
+//		errs() << "GEP\n";
+//		}
+	//if(isa<LoadInst>(call->getArgOperand(0))){
+		//ptrInst = cast<LoadInst>(call->getArgOperand(0));
+	//	sliceArr = cast<LoadInst>(call->getArgOperand(0))->getPointerOperand();
+	//	errs() << "LOAD\n";
+	//	}
+	//sliceAddr->dump();
+//errs() << "line: " << __LINE__ << "\n";
+	
+	for(i=0; i<32; i++){
+		IdxList.at(1) = ConstantInt::get(idxTy, 0);
+		newBlock = builder.CreateAlloca(arrTy, 0, "BLOCK");
+		newBlockAddr = builder.CreateGEP(newBlock, ArrayRef <Value *>(IdxList));
+		//newBlockAddr = builder.CreateLoad();
+//errs() << "line: " << __LINE__ << "\n";
+		IdxList.at(1) = ConstantInt::get(idxTy, i);
+		ptrArrayElem = builder.CreateGEP(ret, ArrayRef <Value *>(IdxList));
+//errs() << "line: " << __LINE__ << "\n";
+		builder.CreateStore(newBlockAddr, ptrArrayElem);
+		for(j=0; j<8; j++){
+			IdxList.at(1) = ConstantInt::get(idxTy, j);
+			newBlockElemAddr = builder.CreateGEP(newBlock, ArrayRef <Value *>(IdxList));
+//errs() << "line: " << __LINE__ << "\n";
+			tmp = ConstantInt::get(byteTy, 0);
+			IdxList.pop_back();
+			for(k=0;k<8;k++){
+				IdxList.at(0) = ConstantInt::get(idxTy, j*8+k);
+				
+//errs() << "pointer type(line " << __LINE__ << "): ";
+//ptrInst->getPointerOperand()->getType()->dump();
+				sliceAddr = builder.CreateGEP(call->getArgOperand(0), ArrayRef <Value *>(IdxList));
+//errs() << "line: " << __LINE__ << "\n";
+				//extract the bit
+				bitVal = builder.CreateLoad(sliceAddr);
+				bitVal = builder.CreateLShr(bitVal, ConstantInt::get(sliceTy, i));
+				bitVal = builder.CreateAnd(bitVal, ConstantInt::get(sliceTy, 1));
+				bitVal = builder.CreateShl(bitVal, k);
+				bitVal = builder.CreateTrunc(bitVal, byteTy);
+				tmp = builder.CreateOr(tmp, bitVal);
+			}
+			IdxList.push_back(idxZero);
+			builder.CreateStore(tmp, newBlockElemAddr);
+		}
+	}
+	
+	return true;
+}
+
 /*
 int searchInstByName(std::vector<StringRef> nameVector, StringRef name){
 	int i = 0;
@@ -141,8 +224,16 @@ namespace{
 						if(Fn && Fn->getIntrinsicID() == Intrinsic::bitslice_i32){
 					//		errs() << "args: \n" << call->getNumArgOperands() << "\n";
 							
-							if(!bitSlice(call, I.getModule()->getContext())){
+							if(!BitSlice(call, I.getModule()->getContext())){
 								errs() << "bitslicing failed\n";
+								}
+							eraseList.push_back(&I);
+							done = 1;
+						}else if(Fn && Fn->getIntrinsicID() == Intrinsic::unbitslice_i32){
+					//		errs() << "args: \n" << call->getNumArgOperands() << "\n";
+							
+							if(!UnBitSlice(call, I.getModule()->getContext())){
+								errs() << "unbitslicing failed\n";
 								}
 							eraseList.push_back(&I);
 							done = 1;
