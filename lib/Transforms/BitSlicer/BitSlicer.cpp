@@ -28,6 +28,7 @@ using namespace llvm;
 
 bool BitSlice(CallInst *call, LLVMContext &Context){
 	IRBuilder<> builder(call);
+	/*
 	if(auto *IntrPtr = dyn_cast<GetElementPtrInst>(call->getArgOperand(0))){
 		if( auto *BlockPtrType = dyn_cast<PointerType>(IntrPtr->getSourceElementType()
 													   ->getArrayElementType()) )
@@ -38,13 +39,11 @@ bool BitSlice(CallInst *call, LLVMContext &Context){
 			}
 		}
 	}
-	
+	*/
 	AllocaInst *ret;
 	//	MDNode *MData = MDNode::get(Context, 
 	//							MDString::get(Context, "bitsliced"));
 	Type *sliceTy = IntegerType::getInt32Ty(Context);
-	//	Value *elemSize = ConstantInt::get(sliceTy,8);
-	//	Value *ortLen = builder.CreateMul(elemSize, call->getArgOperand(2));
 	ArrayType *arrTy;
 	arrTy = ArrayType::get(sliceTy, BLOCK_LEN*8);
 	ret = builder.CreateAlloca(arrTy, 0, "SLICED");
@@ -56,41 +55,30 @@ bool BitSlice(CallInst *call, LLVMContext &Context){
 	IdxList.push_back(idxZero);
 	Value *newPtr = builder.CreateGEP(ret, ArrayRef <Value *>(IdxList), "EXCALL");
 
-	//newPtr->setMetadata("bit-sliced", MData);
 	call->replaceAllUsesWith(newPtr);
 	int i, j;
 	Value *sliceAddr;
 	Value *oldAddr = cast<GetElementPtrInst>(call->getArgOperand(0))->getPointerOperand();
 	Value *tmp;
 	Value *bitVal;
-	Value *Block;
-	Value *BlockElem;
-	//Value *idx2 = ConstantInt::get(idxTy, 0);
+	Value *Byte;
 	
 	for( i = 0; i < BLOCK_LEN*8; i++ ){
-		IdxList.at(0) = idxZero;
 		IdxList.at(1) = ConstantInt::get(idxTy, i);
 		sliceAddr = builder.CreateGEP(ret, ArrayRef <Value *>(IdxList), "sliceAddr");
-		tmp = ConstantInt::get(sliceTy, 0);
-		
+		tmp = ConstantInt::get(sliceTy, 0);	
 		for( j = 0; j < 32; j++){
 			IdxList.at(0) = idxZero;
-			IdxList.at(1) = ConstantInt::get(idxTy, j);
-			Block = builder.CreateGEP(oldAddr, ArrayRef <Value *>(IdxList), "Block");
-			Block = builder.CreateLoad(Block);
-			IdxList.pop_back();
-			IdxList.at(0) = ConstantInt::get(idxTy, i/8);
-			BlockElem = builder.CreateGEP(Block, ArrayRef <Value *>(IdxList), "BlockElem");
-			bitVal = builder.CreateLoad(BlockElem);
-	//		bitVal->getType()->dump();
-			bitVal = builder.CreateZExt(bitVal, sliceTy);
+			IdxList.at(1) = ConstantInt::get(idxTy, j*8+i/8);
+			Byte = builder.CreateGEP(oldAddr, ArrayRef <Value *>(IdxList), "Block");
+			Byte = builder.CreateLoad(Byte);
+
+			bitVal = builder.CreateZExt(Byte, sliceTy);			
 			bitVal = builder.CreateLShr(bitVal, ConstantInt::get(sliceTy, i%8));
 			bitVal = builder.CreateAnd(bitVal, ConstantInt::get(sliceTy, 1));
 			bitVal = builder.CreateShl(bitVal, ConstantInt::get(sliceTy, j));
 			tmp = builder.CreateOr(tmp, bitVal);
-			IdxList.push_back(idxZero);
 		}
-//		sliceAddr->getType()->dump();
 		builder.CreateStore(tmp, sliceAddr);
 	}
 	
@@ -101,16 +89,13 @@ bool BitSlice(CallInst *call, LLVMContext &Context){
 bool UnBitSlice(CallInst *call, LLVMContext &Context){
 	IRBuilder<> builder(call);
 	int i, j, k;
-	AllocaInst *ret, *newBlock;
-	Value *newBlockAddr, *newBlockElemAddr, *ptrArrayElem, *sliceAddr;
-	ArrayType *arrTy, *ptrArrayTy;
+	AllocaInst *ret;
+	Value *newByteAddr, *sliceAddr;
+	ArrayType *arrTy;
 	Type *byteTy = IntegerType::getInt8Ty(Context);
-	PointerType *bytePtrTy = PointerType::getUnqual(byteTy);
-	ptrArrayTy = ArrayType::get(bytePtrTy, 32);
-	arrTy = ArrayType::get(byteTy, BLOCK_LEN);
+	arrTy = ArrayType::get(byteTy, BLOCK_LEN*32);
 	
-	ret = builder.CreateAlloca(ptrArrayTy, 0, "UNSLICE");
-	
+	ret = builder.CreateAlloca(arrTy, 0, "UNSLICE");
 	
 	std::vector<Value *> IdxList;
 	Type *idxTy = IntegerType::getInt64Ty(Context);
@@ -123,47 +108,17 @@ bool UnBitSlice(CallInst *call, LLVMContext &Context){
 	
 	Value *bitVal, *tmp;
 	Type *sliceTy = IntegerType::getInt32Ty(Context);
-//	Value *sliceArr;
-//	Value *ptrInst;
-	
-	//auto *ptrInst = dyn_cast<Instruction>(call->getArgOperand(0));
-//	if(auto *sliceAddr = dyn_cast<Value>(call->getArgOperand(0)->getPointerOperand()->getPointerOperand())){
-		//ptrInst = cast<GetElementPtrInst>(call->getArgOperand(0));
-	//	sliceArr = cast<GetElementPtrInst>(call->getArgOperand(0))->getPointerOperand();
-//		errs() << "GEP\n";
-//		}
-	//if(isa<LoadInst>(call->getArgOperand(0))){
-		//ptrInst = cast<LoadInst>(call->getArgOperand(0));
-	//	sliceArr = cast<LoadInst>(call->getArgOperand(0))->getPointerOperand();
-	//	errs() << "LOAD\n";
-	//	}
-	//sliceAddr->dump();
-//errs() << "line: " << __LINE__ << "\n";
 	
 	for(i=0; i<32; i++){
-		IdxList.at(1) = ConstantInt::get(idxTy, 0);
-		newBlock = builder.CreateAlloca(arrTy, 0, "BLOCK");
-		newBlockAddr = builder.CreateGEP(newBlock, ArrayRef <Value *>(IdxList));
-		//newBlockAddr = builder.CreateLoad();
-//errs() << "line: " << __LINE__ << "\n";
-		IdxList.at(1) = ConstantInt::get(idxTy, i);
-		ptrArrayElem = builder.CreateGEP(ret, ArrayRef <Value *>(IdxList));
-//errs() << "line: " << __LINE__ << "\n";
-		builder.CreateStore(newBlockAddr, ptrArrayElem);
 		for(j=0; j<8; j++){
-			IdxList.at(1) = ConstantInt::get(idxTy, j);
-			newBlockElemAddr = builder.CreateGEP(newBlock, ArrayRef <Value *>(IdxList));
-//errs() << "line: " << __LINE__ << "\n";
+			IdxList.at(1) = ConstantInt::get(idxTy, i*BLOCK_LEN+j);
+			newByteAddr = builder.CreateGEP(ret, ArrayRef <Value *>(IdxList));
 			tmp = ConstantInt::get(byteTy, 0);
 			IdxList.pop_back();
 			for(k=0;k<8;k++){
-				IdxList.at(0) = ConstantInt::get(idxTy, j*8+k);
+				IdxList.at(0) = ConstantInt::get(idxTy, j*BLOCK_LEN+k);
 				
-//errs() << "pointer type(line " << __LINE__ << "): ";
-//ptrInst->getPointerOperand()->getType()->dump();
 				sliceAddr = builder.CreateGEP(call->getArgOperand(0), ArrayRef <Value *>(IdxList));
-//errs() << "line: " << __LINE__ << "\n";
-				//extract the bit
 				bitVal = builder.CreateLoad(sliceAddr);
 				bitVal = builder.CreateLShr(bitVal, ConstantInt::get(sliceTy, i));
 				bitVal = builder.CreateAnd(bitVal, ConstantInt::get(sliceTy, 1));
@@ -171,30 +126,17 @@ bool UnBitSlice(CallInst *call, LLVMContext &Context){
 				bitVal = builder.CreateTrunc(bitVal, byteTy);
 				tmp = builder.CreateOr(tmp, bitVal);
 			}
+			IdxList.at(0) = ConstantInt::get(idxTy, 0);
 			IdxList.push_back(idxZero);
-			builder.CreateStore(tmp, newBlockElemAddr);
+			builder.CreateStore(tmp, newByteAddr);
 		}
 	}
 	
 	return true;
 }
 
-/*
-int searchInstByName(std::vector<StringRef> nameVector, StringRef name){
-	int i = 0;
-	int found = 0;
-	for (std::vector<StringRef>::iterator nm = nameVector.begin(); nm!=nameVector.end(); 
-																   nm++, i++){
-		if (name.equals(*nm))
-			found = 1;
-	}
-	
-	if(found)
-		return i;
-	else
-		return -1;
-}
-*/
+
+
 namespace{
 	
 	struct BitSlicer : public FunctionPass{
