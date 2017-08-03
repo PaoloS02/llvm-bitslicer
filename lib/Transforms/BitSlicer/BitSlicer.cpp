@@ -25,52 +25,64 @@
 
 using namespace llvm;
 
+std::vector<Instruction *> eraseList;
+std::vector<StringRef> AllocOldNames;
+std::vector<AllocaInst *> AllocNewInstBuff;
+std::vector<StringRef> BitSlicedAllocNames;
+std::vector<AllocaInst *> BitSlicedAllocInstBuff;
+
 
 bool BitSlice(CallInst *call, LLVMContext &Context){
 	IRBuilder<> builder(call);
-	/*
-	if(auto *IntrPtr = dyn_cast<GetElementPtrInst>(call->getArgOperand(0))){
-		if( auto *BlockPtrType = dyn_cast<PointerType>(IntrPtr->getSourceElementType()
-													   ->getArrayElementType()) )
-		{
-			if(!BlockPtrType->getElementType()->isIntegerTy(8)){
-				errs() << "Not uint8_t!\n";
-				return false;
-			}
-		}
+		
+	Instruction *inputSize = cast<Instruction>(call->getArgOperand(0));
+	for(; !isa<AllocaInst>(inputSize); inputSize = cast<Instruction>(inputSize->getOperand(0)));
+	AllocaInst *blocksAlloca = cast<AllocaInst>(inputSize);
+	if(!isa<ArrayType>(blocksAlloca->getAllocatedType())){
+		errs() << "ERROR: argument 1 not a static array\n";
+		return false;
 	}
-	*/
-	AllocaInst *ret;
+	uint64_t oldSize = cast<ArrayType>(blocksAlloca->getAllocatedType())->getNumElements();
+		
+	Instruction *outputSize = cast<Instruction>(call->getArgOperand(1));
+	for(; !isa<AllocaInst>(outputSize); outputSize = cast<Instruction>(outputSize->getOperand(0)));
+	AllocaInst *slicesAlloca = cast<AllocaInst>(outputSize);
+	
+	if(!isa<ArrayType>(slicesAlloca->getAllocatedType())){
+		errs() << "ERROR: argument 1 not a static array\n";
+		return false;
+	}
+	uint64_t newSize = dyn_cast<ArrayType>(slicesAlloca->getAllocatedType())->getNumElements();	
+	
+	if(newSize < (oldSize/32)*8){
+		errs() << "ERROR: insufficient size of second operand.\nIt should be at least: ( " << oldSize << " / sizeof(int) ) * 8\n";
+		return false;
+	}
+
+	
 	//	MDNode *MData = MDNode::get(Context, 
 	//							MDString::get(Context, "bitsliced"));
-	Type *sliceTy = IntegerType::getInt32Ty(Context);
-	ArrayType *arrTy;
-	arrTy = ArrayType::get(sliceTy, BLOCK_LEN*8);
-	ret = builder.CreateAlloca(arrTy, 0, "SLICED");
-
+	Type *sliceTy = IntegerType::getInt32Ty(Context);						//FIXME: dependant on the target machine
+	int i, j;
+	
 	std::vector<Value *> IdxList;
 	Type *idxTy = IntegerType::getInt64Ty(Context);
 	Value *idxZero = ConstantInt::get(idxTy, 0);
 	IdxList.push_back(idxZero);
 	IdxList.push_back(idxZero);
-	Value *newPtr = builder.CreateGEP(ret, ArrayRef <Value *>(IdxList), "EXCALL");
-
-	call->replaceAllUsesWith(newPtr);
-	int i, j;
 	Value *sliceAddr;
-	Value *oldAddr = cast<GetElementPtrInst>(call->getArgOperand(0))->getPointerOperand();
 	Value *tmp;
 	Value *bitVal;
 	Value *Byte;
-	
-	for( i = 0; i < BLOCK_LEN*8; i++ ){
+	int inputBits = newSize;
+		
+	for( i = 0; i < inputBits; i++ ){
 		IdxList.at(1) = ConstantInt::get(idxTy, i);
-		sliceAddr = builder.CreateGEP(ret, ArrayRef <Value *>(IdxList), "sliceAddr");
+		sliceAddr = builder.CreateGEP(slicesAlloca, ArrayRef <Value *>(IdxList), "sliceAddr");
 		tmp = ConstantInt::get(sliceTy, 0);	
-		for( j = 0; j < 32; j++){
-			IdxList.at(0) = idxZero;
-			IdxList.at(1) = ConstantInt::get(idxTy, j*8+i/8);
-			Byte = builder.CreateGEP(oldAddr, ArrayRef <Value *>(IdxList), "Block");
+		for( j = 0; j < 32; j++){				//FIXME: dependant on the target machine
+			IdxList.at(1) = ConstantInt::get(idxTy, j*inputBits/8+i/8);
+			Byte = builder.CreateGEP(blocksAlloca, ArrayRef <Value *>(IdxList), "Block");
 			Byte = builder.CreateLoad(Byte);
 
 			bitVal = builder.CreateZExt(Byte, sliceTy);			
@@ -89,13 +101,35 @@ bool BitSlice(CallInst *call, LLVMContext &Context){
 bool UnBitSlice(CallInst *call, LLVMContext &Context){
 	IRBuilder<> builder(call);
 	int i, j, k;
-	AllocaInst *ret;
-	Value *newByteAddr, *sliceAddr;
-	ArrayType *arrTy;
-	Type *byteTy = IntegerType::getInt8Ty(Context);
-	arrTy = ArrayType::get(byteTy, BLOCK_LEN*32);
 	
-	ret = builder.CreateAlloca(arrTy, 0, "UNSLICE");
+	Instruction *inputSize = cast<Instruction>(call->getArgOperand(0));
+	for(; !isa<AllocaInst>(inputSize); inputSize = cast<Instruction>(inputSize->getOperand(0)));
+	AllocaInst *slicesAlloca = cast<AllocaInst>(inputSize);
+	
+	if(!isa<ArrayType>(slicesAlloca->getAllocatedType())){
+		errs() << "ERROR: argument 1 not a static array\n";
+		return false;
+	}
+	uint64_t oldSize = cast<ArrayType>(slicesAlloca->getAllocatedType())->getNumElements();
+	
+	Instruction *outputSize = cast<Instruction>(call->getArgOperand(1));
+	for(; !isa<AllocaInst>(outputSize); outputSize = cast<Instruction>(outputSize->getOperand(0)));
+	AllocaInst *outputAlloca = cast<AllocaInst>(outputSize);
+	
+	if(!isa<ArrayType>(outputAlloca->getAllocatedType())){
+		errs() << "ERROR: argument 1 not a static array\n";
+		return false;
+	}
+	uint64_t newSize = cast<ArrayType>(outputAlloca->getAllocatedType())->getNumElements();
+	
+	if(newSize < (oldSize/32)*8){
+		errs() << "ERROR: insufficient size of second operand.\nIt should be at least: (" 
+			   << oldSize << " / sizeof(int)) * 8\n";
+		return false;
+	}
+		
+	Value *newByteAddr, *sliceAddr;
+	Type *byteTy = IntegerType::getInt8Ty(Context);				//FIXME: dependant on the type used by the block cipher
 	
 	std::vector<Value *> IdxList;
 	Type *idxTy = IntegerType::getInt64Ty(Context);
@@ -103,22 +137,19 @@ bool UnBitSlice(CallInst *call, LLVMContext &Context){
 	IdxList.push_back(idxZero);
 	IdxList.push_back(idxZero);
 	
-	Value *newPtr = builder.CreateGEP(ret, ArrayRef <Value *>(IdxList), "UNSLICED");
-	call->replaceAllUsesWith(newPtr);
-	
 	Value *bitVal, *tmp;
-	Type *sliceTy = IntegerType::getInt32Ty(Context);
+	Type *sliceTy = IntegerType::getInt32Ty(Context);			//FIXME: dependant on the target machine
+	int outputLen = oldSize/8;
 	
-	for(i=0; i<32; i++){
-		for(j=0; j<8; j++){
-			IdxList.at(1) = ConstantInt::get(idxTy, i*BLOCK_LEN+j);
-			newByteAddr = builder.CreateGEP(ret, ArrayRef <Value *>(IdxList));
+	for(i=0; i<32; i++){			//FIXME: dependant on the target machine
+		for(j=0; j < outputLen; j++){
+			IdxList.at(1) = ConstantInt::get(idxTy, i*outputLen + j);
+			newByteAddr = builder.CreateGEP(outputAlloca, ArrayRef <Value *>(IdxList));
 			tmp = ConstantInt::get(byteTy, 0);
-			IdxList.pop_back();
 			for(k=0;k<8;k++){
-				IdxList.at(0) = ConstantInt::get(idxTy, j*BLOCK_LEN+k);
+				IdxList.at(1) = ConstantInt::get(idxTy, j*8 + k);
 				
-				sliceAddr = builder.CreateGEP(call->getArgOperand(0), ArrayRef <Value *>(IdxList));
+				sliceAddr = builder.CreateGEP(slicesAlloca, ArrayRef <Value *>(IdxList));
 				bitVal = builder.CreateLoad(sliceAddr);
 				bitVal = builder.CreateLShr(bitVal, ConstantInt::get(sliceTy, i));
 				bitVal = builder.CreateAnd(bitVal, ConstantInt::get(sliceTy, 1));
@@ -126,8 +157,7 @@ bool UnBitSlice(CallInst *call, LLVMContext &Context){
 				bitVal = builder.CreateTrunc(bitVal, byteTy);
 				tmp = builder.CreateOr(tmp, bitVal);
 			}
-			IdxList.at(0) = ConstantInt::get(idxTy, 0);
-			IdxList.push_back(idxZero);
+
 			builder.CreateStore(tmp, newByteAddr);
 		}
 	}
@@ -146,9 +176,8 @@ namespace{
 //		static int LAST_INSTR_TYPE;
 		static int done;
 		BitSlicer() : FunctionPass(ID) {}
-		std::vector<Instruction *> eraseList;
-		std::vector<StringRef>  AllocOldNames;
-		std::vector<AllocaInst *>  AllocNewInstBuff;
+		
+		
 /*		std::vector<LoadInst *> LoadInstBuff;
 		std::vector<GetElementPtrInst *> GEPInstBuff;
 		
@@ -208,11 +237,14 @@ namespace{
 								}
 								*/
 							ArrayType *arrTy;
+							//Type *sliceTy = IntegerType::getInt32Ty(I.getContext());
+						
 							if(isa<ArrayType>(all->getAllocatedType()))
 								arrTy = ArrayType::get(all->getAllocatedType()->getArrayElementType(),
 																  all->getAllocatedType()->getArrayNumElements()*8*CPU_BYTES);
 							else
 								arrTy = ArrayType::get(all->getAllocatedType(), 8*CPU_BYTES*SENSIBLE_DATA_BYTES);
+							
 							
 							ret = builder.CreateAlloca(arrTy, 0, "bsliced");
 							ret->setMetadata("bitsliced", MData);
