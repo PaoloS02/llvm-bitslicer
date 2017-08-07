@@ -741,6 +741,12 @@ def int_bitslice_i32 : GCCBuiltin<"__builtin_i32_bitslice">,
 def int_unbitslice_i32 : GCCBuiltin<"__builtin_i32_unbitslice">,
 	Intrinsic<[], [LLVMPointerType<llvm_i32_ty>, LLVMPointerType<llvm_i8_ty>]>;
 
+def int_start_bitslice : GCCBuiltin<"__builtin_start_bitslice">,
+	Intrinsic<[], [llvm_ptr_ty, llvm_ptr_ty]>;
+
+def int_end_bitslice : GCCBuiltin<"__builtin_end_bitslice">,
+	Intrinsic<[], [llvm_ptr_ty]>;
+
 //===-------------------------- Masked Intrinsics -------------------------===//
 //
 def int_masked_store : Intrinsic<[], [llvm_anyvector_ty,

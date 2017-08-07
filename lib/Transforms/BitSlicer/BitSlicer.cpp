@@ -6,6 +6,7 @@
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
+#include "llvm/Transforms/Utils/CodeExtractor.h"
 #include "llvm/Analysis/LoopInfo.h"
 
 #include "llvm/Transforms/IPO/PassManagerBuilder.h"
@@ -30,6 +31,7 @@ std::vector<StringRef> AllocOldNames;
 std::vector<AllocaInst *> AllocNewInstBuff;
 std::vector<StringRef> BitSlicedAllocNames;
 std::vector<AllocaInst *> BitSlicedAllocInstBuff;
+
 
 
 bool BitSlice(CallInst *call, LLVMContext &Context){
@@ -167,6 +169,27 @@ bool UnBitSlice(CallInst *call, LLVMContext &Context){
 
 
 
+void EndOrthogonalTransformation(CallInst *call, 
+								 BasicBlock *startBlock, 
+								 BasicBlock *endBlock,
+								 Value *Description){
+	BasicBlock *bb;
+	std::vector<BasicBlock *> BlockList;
+	for (bb = startBlock; bb != endBlock; bb = bb->getUniqueSuccessor()) {
+		BlockList.push_back(bb);
+	}
+	auto CExtr = new CodeExtractor(ArrayRef <BasicBlock *>(BlockList));
+	Function *NewFunc = CExtr->extractCodeRegion();
+	
+	//BasicBlock *entry = BasicBlock::Create(getGlobalContext(), "entry", NewFunc);
+	//IRBuilder<> builder(entry);
+	
+	
+	//for(; token = ParseDescription(Description);)
+}
+
+
+
 namespace{
 	
 	struct BitSlicer : public FunctionPass{
@@ -177,7 +200,8 @@ namespace{
 		static int done;
 		BitSlicer() : FunctionPass(ID) {}
 		
-		
+		BasicBlock *orthStartBlock = nullptr;
+		Value *orthDescription;
 /*		std::vector<LoadInst *> LoadInstBuff;
 		std::vector<GetElementPtrInst *> GEPInstBuff;
 		
@@ -200,6 +224,7 @@ namespace{
 								}
 							eraseList.push_back(&I);
 							done = 1;
+							
 						}else if(Fn && Fn->getIntrinsicID() == Intrinsic::unbitslice_i32){
 					//		errs() << "args: \n" << call->getNumArgOperands() << "\n";
 							
@@ -208,6 +233,18 @@ namespace{
 								}
 							eraseList.push_back(&I);
 							done = 1;
+							
+						}else if(Fn && Fn->getIntrinsicID() == Intrinsic::start_bitslice){
+							
+							orthStartBlock = B.splitBasicBlock(&I, "START_ORTHO");
+							orthDescription = call->getArgOperand(1);
+						//	StartOrthogonalTransformation(call, orthStartBlock);
+							
+						}else if(Fn && Fn->getIntrinsicID() == Intrinsic::end_bitslice){
+							
+							EndOrthogonalTransformation(call, orthStartBlock, 
+														B.splitBasicBlock(&I, "END_ORTHO"),
+														orthDescription);
 						}
 					}
 					
