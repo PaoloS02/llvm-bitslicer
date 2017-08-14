@@ -735,11 +735,14 @@ def int_clear_cache : Intrinsic<[], [llvm_ptr_ty, llvm_ptr_ty],
 def int_bitsliced_i8_bit : GCCBuiltin<"__builtin_i8_bit">,
   	Intrinsic<[llvm_i8_ty], [llvm_i8_ty, llvm_i32_ty], []>;
 
-def int_bitslice_i32 : GCCBuiltin<"__builtin_i32_bitslice">,
+def int_getbitsliced_i32 : GCCBuiltin<"__builtin_i32_get_bitsliced_data">,
 	Intrinsic<[], [LLVMPointerType<llvm_i8_ty>, LLVMPointerType<llvm_i32_ty>]>;
 
-def int_unbitslice_i32 : GCCBuiltin<"__builtin_i32_unbitslice">,
+def int_getunbitsliced_i32 : GCCBuiltin<"__builtin_i32_get_unbitsliced_data">,
 	Intrinsic<[], [LLVMPointerType<llvm_i32_ty>, LLVMPointerType<llvm_i8_ty>]>;
+
+def int_bitslice_i32 : GCCBuiltin<"__builtin_i32_bitslice">,
+	Intrinsic<[], [LLVMPointerType<llvm_i8_ty>]>;
 
 def int_start_bitslice : GCCBuiltin<"__builtin_start_bitslice">,
 	Intrinsic<[], [llvm_ptr_ty, llvm_ptr_ty]>;
