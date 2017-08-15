@@ -245,16 +245,30 @@ void OrthogonalTransformation(CallInst *call, StringRef Description){
 	//StringRef Description = cast<ConstantDataSequential>(cast<User>(cast<User>(call->getArgOperand(1))
 	//						->getOperand(0))->getOperand(0))->getAsCString();
 	errs() << Description << "\n";
-	BasicBlock *OrthBlock = call->getParent();
-	Value *Dest, *LOper, *ROper;
+	//BasicBlock *OrthBlock = call->getParent();
+	IRBuilder<> builder(call);
+	
+	Value *DOper, *LOper, *ROper;
+	AllocaInst *allDOper, *allLOper, *allROper;
+	std::vector<Value *> IdxList;
+	Type *idxTy = IntegerType::getInt64Ty(call->getModule()->getContext());
+	Value *idxZero = ConstantInt::get(idxTy, 0);
+	IdxList.push_back(idxZero);
+	IdxList.push_back(idxZero);
+	uint64_t arraySize;
 	
 	StringRef op;
 	std::vector<StringRef> tokens;
-	std::vector<StringRef> leftElement;
+	std::vector<StringRef> destOperand;
 	std::vector<StringRef> leftOperand;
 	std::vector<StringRef> rightOperand;
-	bool hasDestination, hasFirstOperand, hasSecondOperand, hasOp, preOp, postOp, end;
-	hasDestination = hasFirstOperand = hasSecondOperand = hasOp = preOp = postOp = end = false;
+	
+	bool preOp, postOp, end, 
+		 foundLeftOperand, foundRightOperand, foundDestOperand;
+	
+	preOp = postOp = end = 
+	foundLeftOperand = foundRightOperand = foundDestOperand = false;
+	
 	size_t i, pos, count;
 	for(i=0, pos=0; !end;){
 		pos = Description.find(":", i);
@@ -285,8 +299,6 @@ void OrthogonalTransformation(CallInst *call, StringRef Description){
 					pos = Description.find(":", i);
 					op = Description.substr(i, pos-i);
 					tokens.push_back("-");
-					hasOp = true;
-					//postOp = true;
 					i = pos+1;
 					pos = Description.find(":", i);
 				}if((pos-i) == 0){
@@ -325,7 +337,7 @@ void OrthogonalTransformation(CallInst *call, StringRef Description){
 			errs() << "error: too many arguments for the left member of the assignement\n";
 			return;
 		}
-		leftElement.push_back(tokens.at(i));
+		destOperand.push_back(tokens.at(i));
 	}
 	i++;
 	count = i;
@@ -366,7 +378,54 @@ void OrthogonalTransformation(CallInst *call, StringRef Description){
 		errs() << s << "\n";
 	}
 	
+/*----------------------------------------XOR---------------------------------------*/	
 	
+	if(op.equals("^")){
+		for(i=0; i<AllocOldNames.size(); i++){
+			if(AllocOldNames.at(i).equals(leftOperand.at(0))){
+				allLOper = cast<AllocaInst>(AllocNewInstBuff.at(i));
+				allLOper->getType()->dump();
+				foundLeftOperand = true;
+			}
+			if(AllocOldNames.at(i).equals(rightOperand.at(0))){
+				allROper = cast<AllocaInst>(AllocNewInstBuff.at(i));
+				allROper->getType()->dump();
+				foundRightOperand = true;
+			}
+			if(AllocOldNames.at(i).equals(destOperand.at(0))){
+				allDOper = cast<AllocaInst>(AllocNewInstBuff.at(i));
+				allDOper->getType()->dump();
+				foundDestOperand = true;
+			}
+			if(foundLeftOperand && foundRightOperand && foundDestOperand) break;
+		}
+	
+		if(leftOperand.at(1).equals("all") && rightOperand.at(1).equals("all")){	//all ^ all
+				arraySize = cast<ArrayType>(allLOper->getAllocatedType())->getNumElements();
+				
+				if(arraySize != cast<ArrayType>(allLOper->getAllocatedType())->getNumElements()){
+					errs() << "error: operation addressing all of the bits of operands of different size\n";
+					return;
+				}
+				if(arraySize > cast<ArrayType>(allDOper->getAllocatedType())->getNumElements()){
+					errs() << "error: assignement to variable of insufficient size\n";
+					return;
+				}
+				
+				for(i=0; i<arraySize; i++){
+					IdxList.at(0) = ConstantInt::get(idxTy, i);
+					LOper = builder.CreateGEP(allLOper, ArrayRef <Value *>(IdxList), "LOper");
+					LOper = builder.CreateLoad(LOper);
+					ROper = builder.CreateGEP(allROper, ArrayRef <Value *>(IdxList), "ROper");
+					ROper = builder.CreateLoad(ROper);
+					DOper = builder.CreateGEP(allDOper, ArrayRef <Value *>(IdxList), "DOper");
+					
+					Value *res = builder.CreateXor(LOper, ROper, "Xor");
+					
+					builder.CreateStore(res, DOper, "storeXor");
+				}
+		}
+	}
 	
 }
 
