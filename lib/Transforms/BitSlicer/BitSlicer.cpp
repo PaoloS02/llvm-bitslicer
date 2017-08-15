@@ -239,16 +239,23 @@ bool BitSlice(CallInst *call, LLVMContext &Context){
 	return true;
 }
 
+
+
 void OrthogonalTransformation(CallInst *call, StringRef Description){
 	//StringRef Description = cast<ConstantDataSequential>(cast<User>(cast<User>(call->getArgOperand(1))
 	//						->getOperand(0))->getOperand(0))->getAsCString();
 	errs() << Description << "\n";
 	BasicBlock *OrthBlock = call->getParent();
+	Value *Dest, *LOper, *ROper;
+	
 	StringRef op;
 	std::vector<StringRef> tokens;
+	std::vector<StringRef> leftElement;
+	std::vector<StringRef> leftOperand;
+	std::vector<StringRef> rightOperand;
 	bool hasDestination, hasFirstOperand, hasSecondOperand, hasOp, preOp, postOp, end;
 	hasDestination = hasFirstOperand = hasSecondOperand = hasOp = preOp = postOp = end = false;
-	size_t i, pos;
+	size_t i, pos, count;
 	for(i=0, pos=0; !end;){
 		pos = Description.find(":", i);
 		if(pos==0){
@@ -277,6 +284,7 @@ void OrthogonalTransformation(CallInst *call, StringRef Description){
 			//	if(!postOp){
 					pos = Description.find(":", i);
 					op = Description.substr(i, pos-i);
+					tokens.push_back("-");
 					hasOp = true;
 					//postOp = true;
 					i = pos+1;
@@ -311,9 +319,54 @@ void OrthogonalTransformation(CallInst *call, StringRef Description){
 		}
 	}
 	
+
+	for(i=0; !tokens.at(i).equals("="); i++){
+		if(i>3){
+			errs() << "error: too many arguments for the left member of the assignement\n";
+			return;
+		}
+		leftElement.push_back(tokens.at(i));
+	}
+	i++;
+	count = i;
+
+	if(count<3){
+		errs() << "error: too few arguments for the left member of the assignement\n";
+		return;
+	}
+		
+	for(; !tokens.at(i).equals("-"); i++){
+		if((i-count) > 3){
+			errs() << "error: too many arguments for the left operand\n";
+			return;
+		}
+		leftOperand.push_back(tokens.at(i));
+	}
+
+	if((i-count) < 2){
+		errs() << "error: too few arguments for the left operand\n";
+		return;
+	}
+	i++;
+	count = i;
+	for(; i<tokens.size(); i++){
+		if((i-count) > 3){
+			errs() << "error: too many arguments for the right operand\n";
+			return;
+		}
+		rightOperand.push_back(tokens.at(i));
+	}
+	
+	if((i-count) < 2){
+		errs() << "error: too few arguments for the right operand\n";
+		return;
+	}	
+	
 	for(auto s : tokens){
 		errs() << s << "\n";
 	}
+	
+	
 	
 }
 
