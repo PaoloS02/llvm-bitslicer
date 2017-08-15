@@ -241,7 +241,7 @@ bool BitSlice(CallInst *call, LLVMContext &Context){
 
 
 
-void OrthogonalTransformation(CallInst *call, StringRef Description){
+void OrthogonalTransformation(CallInst *call, BasicBlock *prevBB, StringRef Description){
 	//StringRef Description = cast<ConstantDataSequential>(cast<User>(cast<User>(call->getArgOperand(1))
 	//						->getOperand(0))->getOperand(0))->getAsCString();
 	errs() << Description << "\n";
@@ -251,7 +251,8 @@ void OrthogonalTransformation(CallInst *call, StringRef Description){
 	Value *DOper, *LOper, *ROper;
 	AllocaInst *allDOper, *allLOper, *allROper;
 	std::vector<Value *> IdxList;
-	Type *idxTy = IntegerType::getInt64Ty(call->getModule()->getContext());
+	LLVMContext &Context = call->getModule()->getContext();
+	Type *idxTy = IntegerType::getInt64Ty(Context);
 	Value *idxZero = ConstantInt::get(idxTy, 0);
 	IdxList.push_back(idxZero);
 	IdxList.push_back(idxZero);
@@ -384,22 +385,79 @@ void OrthogonalTransformation(CallInst *call, StringRef Description){
 		for(i=0; i<AllocOldNames.size(); i++){
 			if(AllocOldNames.at(i).equals(leftOperand.at(0))){
 				allLOper = cast<AllocaInst>(AllocNewInstBuff.at(i));
-				allLOper->getType()->dump();
 				foundLeftOperand = true;
 			}
 			if(AllocOldNames.at(i).equals(rightOperand.at(0))){
 				allROper = cast<AllocaInst>(AllocNewInstBuff.at(i));
-				allROper->getType()->dump();
 				foundRightOperand = true;
 			}
 			if(AllocOldNames.at(i).equals(destOperand.at(0))){
 				allDOper = cast<AllocaInst>(AllocNewInstBuff.at(i));
-				allDOper->getType()->dump();
 				foundDestOperand = true;
 			}
 			if(foundLeftOperand && foundRightOperand && foundDestOperand) break;
 		}
+		
+		
+		if(leftOperand.at(1).equals("all") && rightOperand.at(1).equals("all")){
+			arraySize = cast<ArrayType>(allLOper->getAllocatedType())->getNumElements();
+				
+			if(arraySize != cast<ArrayType>(allLOper->getAllocatedType())->getNumElements()){
+				errs() << "error: operation addressing all of the bits of operands of different size\n";
+				return;
+			}
+			if(arraySize > cast<ArrayType>(allDOper->getAllocatedType())->getNumElements()){
+				errs() << "error: assignement to variable of insufficient size\n";
+				return;
+			}
+
+			AllocaInst *idxAlloca;
+			BasicBlock *forEnd;
+			
+			if(prevBB != nullptr){
+				IRBuilder<> forHeadBuilder(prevBB->getTerminator());
+				idxAlloca = forHeadBuilder.CreateAlloca(idxTy, 0, "idx");
+				forHeadBuilder.CreateStore(idxZero, idxAlloca);
+				forEnd = call->getParent();
+				forEnd->setName("for.end");
+			}else{
+				idxAlloca = builder.CreateAlloca(idxTy, 0, "idx");
+				builder.CreateStore(idxZero, idxAlloca);
+				forEnd = call->getParent()->splitBasicBlock(call, "for.end");
+			}
+			
+			BasicBlock *forCond = BasicBlock::Create(Context, "for.cond", call->getFunction(), forEnd);
+			idxAlloca->getParent()->getTerminator()->setSuccessor(0, forCond);
+			
+			IRBuilder<> forCondBuilder(forCond);
+			Value *idx = forCondBuilder.CreateLoad(idxAlloca, "idx");
+			Value *cmp = forCondBuilder.CreateICmpSLT(idx, ConstantInt::get(idxTy, arraySize), "cmp");
+			
+			BasicBlock *forBody = BasicBlock::Create(Context, "for.body", call->getFunction(), forEnd);
+			forCondBuilder.CreateCondBr(cmp, forBody, forEnd);
+			
+			IRBuilder<> forBodyBuilder(forBody);
+			idx = forBodyBuilder.CreateLoad(idxAlloca, "idxprom");
+			IdxList.at(0) = idx;
+			LOper = forBodyBuilder.CreateGEP(allLOper, ArrayRef <Value *>(IdxList), "LOper");
+			LOper = forBodyBuilder.CreateLoad(LOper);
+			ROper = forBodyBuilder.CreateGEP(allROper, ArrayRef <Value *>(IdxList), "ROper");
+			ROper = forBodyBuilder.CreateLoad(ROper);
+			Value *res = forBodyBuilder.CreateXor(LOper, ROper, "xor");
+			DOper = forBodyBuilder.CreateGEP(allDOper, ArrayRef <Value *>(IdxList), "DOper");
+			forBodyBuilder.CreateStore(res, DOper);
+			
+			BasicBlock *forInc = BasicBlock::Create(Context, "for.inc", call->getFunction(), forEnd);
+			forBodyBuilder.CreateBr(forInc);
+			
+			IRBuilder<> forIncBuilder(forInc);
+			Value *inc = forIncBuilder.CreateLoad(idxAlloca);
+			inc = forIncBuilder.CreateNSWAdd(inc, ConstantInt::get(idxTy, 1), "inc");
+			forIncBuilder.CreateStore(inc, idxAlloca);
+			forIncBuilder.CreateBr(forCond);
+		}
 	
+	/*
 		if(leftOperand.at(1).equals("all") && rightOperand.at(1).equals("all")){	//all ^ all
 				arraySize = cast<ArrayType>(allLOper->getAllocatedType())->getNumElements();
 				
@@ -425,6 +483,7 @@ void OrthogonalTransformation(CallInst *call, StringRef Description){
 					builder.CreateStore(res, DOper, "storeXor");
 				}
 		}
+		*/
 	}
 	
 }
@@ -496,7 +555,7 @@ namespace{
 		static int done;
 		BitSlicer() : ModulePass(ID) {}
 		
-		BasicBlock *orthStartBlock = nullptr, *orthEndBlock = nullptr;
+		BasicBlock *orthStartBlock = nullptr, *orthEndBlock = nullptr, *prevBB = nullptr;
 		Value *orthDescription;
 		bool OrthErase = false;
 		bool OrthBBErase = false;
@@ -822,7 +881,6 @@ namespace{
 			}
 		*/
 			
-			
 			for(auto& ESP : endSplitPoints){
 				for(auto& SSP : startSplitPoints){
 					StringRef StartName = cast<ConstantDataSequential>(cast<User>(cast<User>(SSP->getArgOperand(0))
@@ -836,10 +894,10 @@ namespace{
 					//ESP->getParent()->dump();
 		//		errs() << __LINE__ << "\n";	
 						if(ESP->getParent() != SSP->getParent()){
-							BasicBlock *Pred = SSP->getParent();
+							prevBB = SSP->getParent();
 							orthStartBlock = SSP->getParent()->splitBasicBlock(SSP);
 							orthEndBlock = ESP->getParent()->splitBasicBlock(ESP);
-							Pred->getTerminator()->setSuccessor(0, orthEndBlock);
+							prevBB->getTerminator()->setSuccessor(0, orthEndBlock);
 		//			errs() << __LINE__ << "\n";
 						}
 					
@@ -847,19 +905,19 @@ namespace{
 					
 				}
 			}	
-			
-			
+					
 			
 			for(auto &OEI: OrthEraseList){
 				if(!OEI->use_empty())	
 					OEI->replaceAllUsesWith(UndefValue::get(OEI->getType()));
 				OEI -> eraseFromParent();
 			}
-		
+			
 			for(Function& F : M){
 				for(BasicBlock& B : F){
-					if(OrthBBErase)
+					if(OrthBBErase){
 							OrthBBEraseList.push_back(&B);
+					}
 					for(Instruction& I : B){
 						if(I.getMetadata("start-orthogonalization")){
 						//	OrthBBEraseList.push_back(&B);
@@ -867,17 +925,21 @@ namespace{
 							OrthBBErase = true;
 						}
 						if(I.getMetadata("stop-orthogonalization")){
-							OrthBBEraseList.pop_back();
+							if(!OrthBBEraseList.empty())	
+								OrthBBEraseList.pop_back();
 							OrthBBErase = false;
 						}
 					}
 				}
 			}
-			
-			for(auto &EB: OrthBBEraseList){
-				EB -> eraseFromParent();
+		
+			if(!OrthBBEraseList.empty()){
+				for(auto &EB: OrthBBEraseList){
+					EB -> eraseFromParent();
+				}
 			}
 			
+		
 			for(auto& ESP : endSplitPoints){
 				StringRef EndName = cast<ConstantDataSequential>(cast<User>(cast<User>(ESP->getArgOperand(0))
 																->getOperand(0))->getOperand(0))->getAsCString();
@@ -888,8 +950,9 @@ namespace{
 					if(EndName.equals(StartName)){
 						StringRef Descr = cast<ConstantDataSequential>(cast<User>(cast<User>(SSP->getArgOperand(1))
 																	->getOperand(0))->getOperand(0))->getAsCString();
-						OrthogonalTransformation(ESP, Descr);
-						SSP->getParent()->eraseFromParent();
+						OrthogonalTransformation(ESP, prevBB, Descr);
+						if(prevBB != nullptr)
+							SSP->getParent()->eraseFromParent();
 		//				errs() << __LINE__ << "\n";	
 					}
 				}
@@ -906,7 +969,8 @@ namespace{
 				if(EI->getParent() != nullptr)
 					EI -> eraseFromParent();
 			}
-	//errs() << __LINE__ << "\n";			
+	//errs() << __LINE__ << "\n";
+				
 			if(done)
 				return true;
 			return false;
