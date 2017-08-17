@@ -205,7 +205,7 @@ bool BitSlice(CallInst *call, LLVMContext &Context){
 	AllocaInst *all = builder.CreateAlloca(arrTy, 0, "SLICES");
 	AllocNewInstBuff.push_back(all);
 	
-	int i, j;
+	//int i, j;
 	
 	std::vector<Value *> IdxList;
 	Type *idxTy = IntegerType::getInt64Ty(Context);
@@ -330,6 +330,7 @@ void OrthogonalTransformation(CallInst *call, BasicBlock *prevBB, StringRef Desc
 	IdxList.push_back(idxZero);
 	IdxList.push_back(idxZero);
 	uint64_t arraySize;
+	int selectOperand = 0;
 	
 	StringRef op;
 	std::vector<StringRef> tokens;
@@ -440,6 +441,7 @@ void OrthogonalTransformation(CallInst *call, BasicBlock *prevBB, StringRef Desc
 			errs() << "error: too many arguments for the right operand\n";
 			return;
 		}
+		errs() << "push back " << i-count << ": " << tokens.at(i) << "\n";
 		rightOperand.push_back(tokens.at(i));
 	}
 	
@@ -529,6 +531,94 @@ void OrthogonalTransformation(CallInst *call, BasicBlock *prevBB, StringRef Desc
 			forIncBuilder.CreateStore(inc, idxAlloca);
 			forIncBuilder.CreateBr(forCond);
 		}
+
+//bits are universal, while the element size may depend... why don't we make the user express the range
+//in terms of bits?
+		uint64_t rangeBeginLOp, rangeEndLOp, rangeBeginROp, rangeEndROp, range = 0;
+		if(leftOperand.at(1).equals("range") || rightOperand.at(1).equals("range")){
+			pos = StringRef::npos;
+			if(leftOperand.at(1).equals("range"))
+				pos = leftOperand.at(2).find(",", 0);		
+			if(pos != StringRef::npos){
+				rangeBeginLOp = std::stoi(leftOperand.at(2).substr(0, pos).str());
+				pos++;
+				rangeEndLOp = std::stoi(leftOperand.at(2).substr(pos, leftOperand.at(2).size()-1).str());
+				range = rangeEndLOp - rangeBeginLOp + 1;		//first and last bits included
+				selectOperand = 0;
+			}
+			pos = StringRef::npos;
+			if(rightOperand.at(1).equals("range"))
+				pos = rightOperand.at(2).find(",", 0);		
+			if(pos != StringRef::npos){
+				rangeBeginROp = std::stoi(rightOperand.at(2).substr(0, pos).str());
+				pos++;
+				rangeEndROp = std::stoi(rightOperand.at(2).substr(pos, rightOperand.at(2).size()-1).str());
+				range = rangeEndROp - rangeBeginROp + 1;
+				selectOperand = 1;
+			}
+			
+			if(leftOperand.at(1).equals("range") && rightOperand.at(1).equals("range")){
+				if((rangeEndLOp-rangeBeginLOp) != (rangeEndROp-rangeBeginROp)){
+					errs() << "error: ranges of different size\n";
+					return;
+				}
+			}
+			
+			AllocaInst *idxAlloca;
+			BasicBlock *forEnd;
+			
+			if(prevBB != nullptr){
+				IRBuilder<> forHeadBuilder(prevBB->getTerminator());
+				idxAlloca = forHeadBuilder.CreateAlloca(idxTy, 0, "idx");
+				forHeadBuilder.CreateStore(idxZero, idxAlloca);
+				forEnd = call->getParent();
+				forEnd->setName("for.end");
+			}else{
+				idxAlloca = builder.CreateAlloca(idxTy, 0, "idx");
+				builder.CreateStore(idxZero, idxAlloca);
+				forEnd = call->getParent()->splitBasicBlock(call, "for.end");
+			}
+			
+			BasicBlock *forCond = BasicBlock::Create(Context, "for.cond", call->getFunction(), forEnd);
+			idxAlloca->getParent()->getTerminator()->setSuccessor(0, forCond);
+			
+			IRBuilder<> forCondBuilder(forCond);
+			Value *idx = forCondBuilder.CreateLoad(idxAlloca, "idx");
+			Value *cmp = forCondBuilder.CreateICmpSLT(idx, ConstantInt::get(idxTy, range), "cmp");
+			
+			BasicBlock *forBody = BasicBlock::Create(Context, "for.body", call->getFunction(), forEnd);
+			forCondBuilder.CreateCondBr(cmp, forBody, forEnd);
+			
+			IRBuilder<> forBodyBuilder(forBody);
+			idx = forBodyBuilder.CreateLoad(idxAlloca, "idxprom");
+			IdxList.at(1) = idx;
+			if(selectOperand == 0){
+				Value *addOffset = forBodyBuilder.CreateAdd(idx, ConstantInt::get(idxTy, rangeBeginLOp), "offset");
+				IdxList.at(1) = addOffset;
+			}
+			LOper = forBodyBuilder.CreateGEP(allLOper, ArrayRef <Value *>(IdxList), "LOper");
+			LOper = forBodyBuilder.CreateLoad(LOper);
+			IdxList.at(1) = idx;
+			if(selectOperand == 1){
+				Value *addOffset = forBodyBuilder.CreateAdd(idx, ConstantInt::get(idxTy, rangeBeginROp), "offset");
+				IdxList.at(1) = addOffset;
+			}
+			ROper = forBodyBuilder.CreateGEP(allROper, ArrayRef <Value *>(IdxList), "ROper");
+			ROper = forBodyBuilder.CreateLoad(ROper);
+			Value *res = forBodyBuilder.CreateXor(LOper, ROper, "xor");
+			IdxList.at(1) = idx;
+			DOper = forBodyBuilder.CreateGEP(allDOper, ArrayRef <Value *>(IdxList), "DOper");
+			forBodyBuilder.CreateStore(res, DOper);
+			
+			BasicBlock *forInc = BasicBlock::Create(Context, "for.inc", call->getFunction(), forEnd);
+			forBodyBuilder.CreateBr(forInc);
+			
+			IRBuilder<> forIncBuilder(forInc);
+			Value *inc = forIncBuilder.CreateLoad(idxAlloca);
+			inc = forIncBuilder.CreateNSWAdd(inc, ConstantInt::get(idxTy, 1), "inc");
+			forIncBuilder.CreateStore(inc, idxAlloca);
+			forIncBuilder.CreateBr(forCond);
+		}
 	
 	/*
 		if(leftOperand.at(1).equals("all") && rightOperand.at(1).equals("all")){	//all ^ all
@@ -559,6 +649,13 @@ void OrthogonalTransformation(CallInst *call, BasicBlock *prevBB, StringRef Desc
 		*/
 	}
 	
+	
+/*----------------------------------------MOVE--------------------------------------*/
+/*	
+	if(op.equals("move")){
+		
+	}
+*/	
 }
 
 
