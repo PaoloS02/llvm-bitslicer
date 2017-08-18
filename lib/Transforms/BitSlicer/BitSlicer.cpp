@@ -31,6 +31,7 @@ using namespace llvm;
 std::vector<Instruction *> eraseList;
 std::vector<Instruction *> OrthEraseList;
 std::vector<BasicBlock *> OrthBBEraseList;
+std::vector<CallInst *> emitPoints;
 std::vector<CallInst *> startSplitPoints;
 std::vector<CallInst *> endSplitPoints;
 std::vector<CallInst *> BitSliceAlloc;
@@ -314,7 +315,7 @@ bool BitSlice(CallInst *call, LLVMContext &Context){
 
 
 
-void OrthogonalTransformation(CallInst *call, BasicBlock *prevBB, StringRef Description){
+void OrthogonalTransformation(CallInst *call, StringRef Description){
 	//StringRef Description = cast<ConstantDataSequential>(cast<User>(cast<User>(call->getArgOperand(1))
 	//						->getOperand(0))->getOperand(0))->getAsCString();
 	errs() << Description << "\n";
@@ -443,7 +444,6 @@ void OrthogonalTransformation(CallInst *call, BasicBlock *prevBB, StringRef Desc
 			errs() << "error: too many arguments for the right operand\n";
 			return;
 		}
-		errs() << "push back " << i-count << ": " << tokens.at(i) << "\n";
 		rightOperand.push_back(tokens.at(i));
 	}
 	
@@ -488,9 +488,10 @@ void OrthogonalTransformation(CallInst *call, BasicBlock *prevBB, StringRef Desc
 				return;
 			}
 
-			AllocaInst *idxAlloca;
-			BasicBlock *forEnd;
-			
+			AllocaInst *idxAlloca = builder.CreateAlloca(idxTy, 0, "idx");
+			builder.CreateStore(idxZero, idxAlloca);
+			BasicBlock *forEnd = call->getParent()->splitBasicBlock(call, "for.end");
+	/*		
 			if(prevBB != nullptr){
 				IRBuilder<> forHeadBuilder(prevBB->getTerminator());
 				idxAlloca = forHeadBuilder.CreateAlloca(idxTy, 0, "idx");
@@ -502,7 +503,7 @@ void OrthogonalTransformation(CallInst *call, BasicBlock *prevBB, StringRef Desc
 				builder.CreateStore(idxZero, idxAlloca);
 				forEnd = call->getParent()->splitBasicBlock(call, "for.end");
 			}
-			
+	*/		
 			BasicBlock *forCond = BasicBlock::Create(Context, "for.cond", call->getFunction(), forEnd);
 			idxAlloca->getParent()->getTerminator()->setSuccessor(0, forCond);
 			
@@ -566,9 +567,10 @@ void OrthogonalTransformation(CallInst *call, BasicBlock *prevBB, StringRef Desc
 				}
 			}
 			
-			AllocaInst *idxAlloca;
-			BasicBlock *forEnd;
-			
+			AllocaInst *idxAlloca = builder.CreateAlloca(idxTy, 0, "idx");
+			builder.CreateStore(idxZero, idxAlloca);
+			BasicBlock *forEnd = call->getParent()->splitBasicBlock(call, "for.end");
+	/*		
 			if(prevBB != nullptr){
 				IRBuilder<> forHeadBuilder(prevBB->getTerminator());
 				idxAlloca = forHeadBuilder.CreateAlloca(idxTy, 0, "idx");
@@ -580,7 +582,7 @@ void OrthogonalTransformation(CallInst *call, BasicBlock *prevBB, StringRef Desc
 				builder.CreateStore(idxZero, idxAlloca);
 				forEnd = call->getParent()->splitBasicBlock(call, "for.end");
 			}
-			
+	*/		
 			BasicBlock *forCond = BasicBlock::Create(Context, "for.cond", call->getFunction(), forEnd);
 			idxAlloca->getParent()->getTerminator()->setSuccessor(0, forCond);
 			
@@ -682,10 +684,12 @@ void OrthogonalTransformation(CallInst *call, BasicBlock *prevBB, StringRef Desc
 		
 		if(leftOperand.at(1).equals("all") && rightOperand.at(1).equals("all")){
 			arraySize = cast<ArrayType>(allLOper->getAllocatedType())->getNumElements();
-			AllocaInst *idxAlloca;
-			AllocaInst *tmpArray;
-			BasicBlock *forEnd;
 			ArrayType *arrTy = ArrayType::get(sliceTy, arraySize);
+			AllocaInst *tmpArray = builder.CreateAlloca(arrTy, 0, "tmpArray");
+			AllocaInst *idxAlloca = builder.CreateAlloca(idxTy, 0, "idx");
+			builder.CreateStore(idxZero, idxAlloca);
+			BasicBlock *forEnd = call->getParent()->splitBasicBlock(call, "for.end");
+	/*		
 			if(prevBB != nullptr){
 			errs() << __LINE__ << "\n";
 				IRBuilder<> forHeadBuilder(prevBB->getTerminator());
@@ -701,18 +705,14 @@ void OrthogonalTransformation(CallInst *call, BasicBlock *prevBB, StringRef Desc
 				forEnd = call->getParent()->splitBasicBlock(call, "for.end");
 			}
 			
-			
+	*/		
 			BasicBlock *forCond = BasicBlock::Create(Context, "for.cond", call->getFunction(), forEnd);
-			forCond->dump();
 			idxAlloca->getParent()->getTerminator()->setSuccessor(0, forCond);
-			idxAlloca->getParent()->dump();
-			
 			
 			IRBuilder<> forCondBuilder(forCond);
 			Value *idx = forCondBuilder.CreateLoad(idxAlloca, "idx");
 			Value *cmp = forCondBuilder.CreateICmpSLT(idx, ConstantInt::get(idxTy, arraySize), "cmp");
 			BasicBlock *forBody = BasicBlock::Create(Context, "for.body", call->getFunction(), forEnd);
-			forBody->dump();
 			forCondBuilder.CreateCondBr(cmp, forBody, forEnd);
 			
 			IRBuilder<> forBodyBuilder(forBody);
@@ -731,10 +731,9 @@ void OrthogonalTransformation(CallInst *call, BasicBlock *prevBB, StringRef Desc
 			forIncBuilder.CreateStore(inc, idxAlloca);
 			forIncBuilder.CreateBr(forCond);
 			
-			
-			builder.CreateStore(idxZero, idxAlloca, "OLD");
-			forEnd = call->getParent();
 			BasicBlock *forEnd2 = call->getParent()->splitBasicBlock(call, "for.end");
+			IRBuilder<> forEndBuilder(forEnd->getTerminator());
+			forEndBuilder.CreateStore(idxZero, idxAlloca);
 			BasicBlock *forCond2 = BasicBlock::Create(Context, "for.cond", call->getFunction(), forEnd2);
 			forEnd->getTerminator()->setSuccessor(0, forCond2);
 			
@@ -761,14 +760,12 @@ void OrthogonalTransformation(CallInst *call, BasicBlock *prevBB, StringRef Desc
 			forBody2Builder.CreateBr(forInc2);
 			
 			IRBuilder<> forInc2Builder(forInc2);
-			inc = forInc2Builder.CreateLoad(idxAlloca);
-			inc = forInc2Builder.CreateNSWAdd(inc, ConstantInt::get(idxTy, 1), "inc");
-			forInc2Builder.CreateStore(inc, idxAlloca);
+			Value *inc2 = forInc2Builder.CreateLoad(idxAlloca);
+			inc2 = forInc2Builder.CreateNSWAdd(inc2, ConstantInt::get(idxTy, 1), "inc");
+			forInc2Builder.CreateStore(inc2, idxAlloca);
 			forInc2Builder.CreateBr(forCond2);
-
 		}
 	}
-	errs() << __LINE__ << "\n";
 }
 
 
@@ -878,8 +875,8 @@ namespace{
 		
 		BasicBlock *orthStartBlock = nullptr, *orthEndBlock = nullptr, *prevBB = nullptr;
 		Value *orthDescription;
-		bool OrthErase = false;
-		bool OrthBBErase = false;
+	//	bool OrthErase = false;
+	//	bool OrthBBErase = false;
 		bool SameBlock = false;
 /*		std::vector<LoadInst *> LoadInstBuff;
 		std::vector<GetElementPtrInst *> GEPInstBuff;
@@ -898,8 +895,8 @@ namespace{
 				
 	//		B.dump();
 				for(Instruction& I : B){
-					if(OrthErase)
-						OrthEraseList.push_back(&I);
+					//if(OrthErase)
+					//	OrthEraseList.push_back(&I);
 					
 					IRBuilder<> builder(&I);
 					if(auto *call = dyn_cast<CallInst>(&I)){
@@ -931,14 +928,14 @@ namespace{
 							MDNode *MData = MDNode::get(I.getModule()->getContext(), 
 								MDString::get(I.getModule()->getContext(), "start-orthogonalization"));
 							call->setMetadata("start-orthogonalization", MData);
-							startSplitPoints.push_back(call);
+							emitPoints.push_back(call);
 				
-							Descriptions.push_back(cast<ConstantDataSequential>(cast<User>(cast<User>(call->getArgOperand(1))
-													->getOperand(0))->getOperand(0))->getAsCString());
+						//	Descriptions.push_back(cast<ConstantDataSequential>(cast<User>(cast<User>(call->getArgOperand(1))
+						//							->getOperand(0))->getOperand(0))->getAsCString());
 					
 						
 						//	OrthogonalTransformation(call);
-							OrthErase = true;
+						//	OrthErase = true;
 							eraseList.push_back(&I);
 									
 						}else if(Fn && Fn->getIntrinsicID() == Intrinsic::end_bitslice){
@@ -946,10 +943,10 @@ namespace{
 							MDNode *MData = MDNode::get(I.getModule()->getContext(), 
 								MDString::get(I.getModule()->getContext(), "stop-orthogonalization"));
 							call->setMetadata("stop-orthogonalization", MData);
-							endSplitPoints.push_back(call);
-							OrthEraseList.pop_back();
+						//	endSplitPoints.push_back(call);
+						//	OrthEraseList.pop_back();
 //					
-							OrthErase = false;
+						//	OrthErase = false;
 							eraseList.push_back(&I);
 					
 						}
@@ -1212,7 +1209,7 @@ namespace{
 				}
 			}
 		*/
-			
+		/*	
 			for(auto& ESP : endSplitPoints){
 				for(auto& SSP : startSplitPoints){
 					StringRef StartName = cast<ConstantDataSequential>(cast<User>(cast<User>(SSP->getArgOperand(0))
@@ -1237,14 +1234,15 @@ namespace{
 					
 				}
 			}	
-					
-			
+			*/		
+			/*
 			for(auto &OEI: OrthEraseList){
 				if(!OEI->use_empty())	
 					OEI->replaceAllUsesWith(UndefValue::get(OEI->getType()));
 				OEI -> eraseFromParent();
 			}
-			
+			*/
+			/*
 			for(Function& F : M){
 				for(BasicBlock& B : F){
 					if(OrthBBErase){
@@ -1270,12 +1268,20 @@ namespace{
 					EB -> eraseFromParent();
 				}
 			}
-			
+		*/
+		
+			for(auto& EP : emitPoints){
+				StringRef Descr = cast<ConstantDataSequential>(cast<User>(cast<User>(EP->getArgOperand(1))
+																->getOperand(0))->getOperand(0))->getAsCString();
+				OrthogonalTransformation(EP, Descr);
+			}
+		
+		/*	
 			for(auto& ESP : endSplitPoints){
 				StringRef EndName = cast<ConstantDataSequential>(cast<User>(cast<User>(ESP->getArgOperand(0))
 																->getOperand(0))->getOperand(0))->getAsCString();
 				for(unsigned SSP = 0; SSP<startSplitPoints.size(); SSP++){
-					errs() << __LINE__ << "\n";	
+					
 					StringRef StartName = cast<ConstantDataSequential>(
 													cast<User>(cast<User>(startSplitPoints.at(SSP)->getArgOperand(0))
 													->getOperand(0))->getOperand(0))
@@ -1285,7 +1291,7 @@ namespace{
 					if(EndName.equals(StartName)){
 						StringRef Descr = cast<ConstantDataSequential>(cast<User>(cast<User>(startSplitPoints.at(SSP)
 													->getArgOperand(1))->getOperand(0))->getOperand(0))->getAsCString();
-				errs() << __LINE__ << "\n";				
+							
 						OrthogonalTransformation(ESP, prevBB, Descr);
 						
 						if(prevBB != nullptr){
@@ -1297,21 +1303,30 @@ namespace{
 					}
 				}
 			}
+			*/
 	
-		/*
+		
 			for(Function& F : M){
 				for(BasicBlock& B : F){
-					B.dump();
+					for(Instruction& I : B){
+						if(I.getParent() != &B){
+							errs() << "BOGUS PARENT!\n";
+							I.dump();
+							I.getParent()->dump();
+							B.dump();
+						}
+					}
+					//B.dump();
 				}
 			}
-		*/
+		
 	//			
 			for(auto &EI: eraseList){
 				if(EI->getParent() != nullptr)
 					EI -> eraseFromParent();
 			}
 	//
-				
+			
 			if(done)
 				return true;
 			return false;
