@@ -376,14 +376,14 @@ bool UnBitSlice(CallInst *call, LLVMContext &Context){
 	
 	IRBuilder<> forBody2Builder(forBody2);
 	idx = forBody2Builder.CreateLoad(idxAlloca, "idxprom");
-	Value *idxMod = forBody2Builder.CreateSRem(idx, ConstantInt::get(idxTy, 8), "idx_mod");
+	Value *idxMod = forBody2Builder.CreateSRem(idx, ConstantInt::get(idxTy, ByteSizeOfOutput), "idx_mod");
 	Value *idxMul = forBody2Builder.CreateNSWMul(idxMod, ConstantInt::get(idxTy, 8), "idx_mul");
 	idx2 = forBody2Builder.CreateLoad(idx2Alloca);
 	Value *idxAdd = forBody2Builder.CreateNSWAdd(idxMul, idx2);
 	IdxList.at(1) = idxAdd;
 	Value *sliceAddr = forBody2Builder.CreateGEP(slicesAlloca, ArrayRef <Value *>(IdxList));
 	Value *slice = forBody2Builder.CreateLoad(sliceAddr);
-	Value *sliceShift = forBody2Builder.CreateSDiv(idx, ConstantInt::get(idxTy, 8));
+	Value *sliceShift = forBody2Builder.CreateSDiv(idx, ConstantInt::get(idxTy, ByteSizeOfOutput));
 	Value *byte = forBody2Builder.CreateZExt(slice, idxTy);
 	byte = forBody2Builder.CreateLShr(byte, sliceShift);
 	byte = forBody2Builder.CreateAnd(byte, ConstantInt::get(idxTy, 1));
@@ -431,6 +431,7 @@ void OrthogonalTransformation(CallInst *call, StringRef Description){
 	Value *DOper, *LOper, *ROper;
 	AllocaInst *allDOper, *allLOper, *allROper;
 	GlobalVariable *glOper;
+	int constOper;
 	std::vector<Value *> IdxList;
 	LLVMContext &Context = call->getModule()->getContext();
 	Type *sliceTy = IntegerType::getInt32Ty(Context);
@@ -448,10 +449,12 @@ void OrthogonalTransformation(CallInst *call, StringRef Description){
 	std::vector<StringRef> rightOperand;
 	
 	bool preOp, postOp, end, 
-		 foundLeftOperand, foundRightOperand, foundDestOperand, globalRightOperand;
+		 foundLeftOperand, foundRightOperand, foundDestOperand,
+		 globalRightOperand, constantRightOperand;
 	
 	preOp = postOp = end = 
-	foundLeftOperand = foundRightOperand = foundDestOperand = globalRightOperand = false;
+	foundLeftOperand = foundRightOperand = foundDestOperand = 
+	globalRightOperand = constantRightOperand = false;
 	
 	size_t i, pos, count;
 	for(i=0, pos=0; !end;){
@@ -538,11 +541,12 @@ void OrthogonalTransformation(CallInst *call, StringRef Description){
 		}
 		leftOperand.push_back(tokens.at(i));
 	}
-
+/*
 	if((i-count) < 2){
 		errs() << "error: too few arguments for the left operand\n";
 		return;
 	}
+*/
 	i++;
 	count = i;
 	for(; i<tokens.size(); i++){
@@ -552,12 +556,12 @@ void OrthogonalTransformation(CallInst *call, StringRef Description){
 		}
 		rightOperand.push_back(tokens.at(i));
 	}
-	
+/*	
 	if((i-count) < 2){
 		errs() << "error: too few arguments for the right operand\n";
 		return;
 	}	
-	
+*/	
 	for(auto s : tokens){
 		errs() << s << "\n";
 	}
@@ -871,6 +875,101 @@ void OrthogonalTransformation(CallInst *call, StringRef Description){
 			forInc2Builder.CreateStore(inc2, idxAlloca);
 			forInc2Builder.CreateBr(forCond2);
 		}
+	}
+
+	
+/*--------------------------------------ROT------------------------------------*/
+
+	if(op.equals("rotL")){
+		for(i=0; i<AllocOldNames.size(); i++){
+			if(AllocOldNames.at(i).equals(leftOperand.at(0))){
+				allLOper = cast<AllocaInst>(AllocNewInstBuff.at(i));
+				foundLeftOperand = true;
+			}
+			if(AllocOldNames.at(i).equals(rightOperand.at(0))){
+				allROper = cast<AllocaInst>(AllocNewInstBuff.at(i));
+				foundRightOperand = true;
+			}
+			if(!foundRightOperand){
+				constOper = std::stoi(rightOperand.at(0).str());
+				constantRightOperand = true;
+			}
+			if(AllocOldNames.at(i).equals(destOperand.at(0))){
+				allDOper = cast<AllocaInst>(AllocNewInstBuff.at(i));
+				foundDestOperand = true;
+			}
+			if(foundLeftOperand && (foundRightOperand || constantRightOperand) && foundDestOperand) break;
+		}
+		
+		arraySize = cast<ArrayType>(allLOper->getAllocatedType())->getNumElements();
+		ArrayType *arrTy = ArrayType::get(sliceTy, arraySize);
+		AllocaInst *tmpArray = builder.CreateAlloca(arrTy, 0, "tmpArray");
+		AllocaInst *idxAlloca = builder.CreateAlloca(idxTy, 0, "idx");
+		builder.CreateStore(idxZero, idxAlloca);
+		BasicBlock *forEnd = call->getParent()->splitBasicBlock(call, "for.end");
+		BasicBlock *forCond = BasicBlock::Create(Context, "for.cond", call->getFunction(), forEnd);
+		idxAlloca->getParent()->getTerminator()->setSuccessor(0, forCond);
+			
+		IRBuilder<> forCondBuilder(forCond);
+		Value *idx = forCondBuilder.CreateLoad(idxAlloca, "idx");
+		Value *cmp = forCondBuilder.CreateICmpSLT(idx, ConstantInt::get(idxTy, arraySize), "cmp");
+		BasicBlock *forBody = BasicBlock::Create(Context, "for.body", call->getFunction(), forEnd);
+		forCondBuilder.CreateCondBr(cmp, forBody, forEnd);
+			
+		IRBuilder<> forBodyBuilder(forBody);
+		idx = forBodyBuilder.CreateLoad(idxAlloca, "idxprom");
+		IdxList.at(1) = idx;
+		LOper = forBodyBuilder.CreateGEP(allLOper, ArrayRef <Value *>(IdxList));
+		LOper = forBodyBuilder.CreateLoad(LOper);
+		Value *copy = forBodyBuilder.CreateGEP(tmpArray, ArrayRef <Value *>(IdxList));
+		forBodyBuilder.CreateStore(LOper, copy);
+		BasicBlock *forInc = BasicBlock::Create(Context, "for.inc", call->getFunction(), forEnd);
+		forBodyBuilder.CreateBr(forInc);
+	
+		IRBuilder<> forIncBuilder(forInc);
+		Value *inc = forIncBuilder.CreateLoad(idxAlloca);
+		inc = forIncBuilder.CreateNSWAdd(inc, ConstantInt::get(idxTy, 1), "inc");
+		forIncBuilder.CreateStore(inc, idxAlloca);
+		forIncBuilder.CreateBr(forCond);
+
+
+
+		BasicBlock *forEnd2 = call->getParent()->splitBasicBlock(call, "for.end");
+		IRBuilder<> forEndBuilder(forEnd->getTerminator());
+		forEndBuilder.CreateStore(idxZero, idxAlloca);
+		BasicBlock *forCond2 = BasicBlock::Create(Context, "for.cond", call->getFunction(), forEnd2);
+		forEnd->getTerminator()->setSuccessor(0, forCond2);
+		
+		IRBuilder<> forCond2Builder(forCond2);
+		idx = forCond2Builder.CreateLoad(idxAlloca, "idx");
+		cmp = forCond2Builder.CreateICmpSLT(idx, ConstantInt::get(idxTy, arraySize), "cmp");
+		BasicBlock *forBody2 = BasicBlock::Create(Context, "for.body", call->getFunction(), forEnd2);
+		forCond2Builder.CreateCondBr(cmp, forBody2, forEnd2);
+			
+		IRBuilder<> forBody2Builder(forBody2);
+		idx = forBody2Builder.CreateLoad(idxAlloca, "idxprom");
+		IdxList.at(1) = idx;
+		Value *tmp = forBody2Builder.CreateGEP(tmpArray, ArrayRef <Value *>(IdxList));
+		tmp = forBody2Builder.CreateLoad(tmp);
+		Value *rotIdx;
+		if(constantRightOperand)
+			rotIdx = forBody2Builder.CreateAdd(idx, ConstantInt::get(idxTy, constOper));
+		else{
+			rotIdx = forBody2Builder.CreateLoad(allROper);
+			rotIdx = forBody2Builder.CreateAdd(idx, rotIdx);
+		}
+		rotIdx = forBody2Builder.CreateSRem(rotIdx, ConstantInt::get(idxTy, arraySize));
+		IdxList.at(1) = rotIdx;
+		DOper = forBody2Builder.CreateGEP(allLOper, ArrayRef <Value *>(IdxList), "LOper");
+		forBody2Builder.CreateStore(tmp, DOper);
+		BasicBlock *forInc2 = BasicBlock::Create(Context, "for.inc", call->getFunction(), forEnd2);
+		forBody2Builder.CreateBr(forInc2);
+		
+		IRBuilder<> forInc2Builder(forInc2);
+		Value *inc2 = forInc2Builder.CreateLoad(idxAlloca);
+		inc2 = forInc2Builder.CreateNSWAdd(inc2, ConstantInt::get(idxTy, 1), "inc");
+		forInc2Builder.CreateStore(inc2, idxAlloca);
+		forInc2Builder.CreateBr(forCond2);
 	}
 }
 
