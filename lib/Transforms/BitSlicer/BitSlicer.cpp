@@ -880,7 +880,7 @@ void OrthogonalTransformation(CallInst *call, StringRef Description){
 	
 /*--------------------------------------ROT------------------------------------*/
 
-	if(op.equals("rotL")){
+	if(op.equals("rotL") || op.equals("rotR")){
 		for(i=0; i<AllocOldNames.size(); i++){
 			if(AllocOldNames.at(i).equals(leftOperand.at(0))){
 				allLOper = cast<AllocaInst>(AllocNewInstBuff.at(i));
@@ -952,11 +952,19 @@ void OrthogonalTransformation(CallInst *call, StringRef Description){
 		Value *tmp = forBody2Builder.CreateGEP(tmpArray, ArrayRef <Value *>(IdxList));
 		tmp = forBody2Builder.CreateLoad(tmp);
 		Value *rotIdx;
-		if(constantRightOperand)
-			rotIdx = forBody2Builder.CreateAdd(idx, ConstantInt::get(idxTy, constOper));
-		else{
+		if(constantRightOperand){
+			if(op.equals("rotL"))	
+				rotIdx = forBody2Builder.CreateNSWAdd(idx, ConstantInt::get(idxTy, constOper));
+			else if(op.equals("rotR"))
+				rotIdx = forBody2Builder.CreateNSWAdd(idx, ConstantInt::get(idxTy, arraySize-constOper));
+		}else{
 			rotIdx = forBody2Builder.CreateLoad(allROper);
-			rotIdx = forBody2Builder.CreateAdd(idx, rotIdx);
+			if(op.equals("rotL"))
+				rotIdx = forBody2Builder.CreateNSWAdd(idx, rotIdx);
+			else if(op.equals("rotR")){
+				Value *complement = forBody2Builder.CreateNSWSub(ConstantInt::get(idxTy, arraySize), rotIdx);
+				rotIdx = forBody2Builder.CreateNSWAdd(rotIdx, complement);
+			}	
 		}
 		rotIdx = forBody2Builder.CreateSRem(rotIdx, ConstantInt::get(idxTy, arraySize));
 		IdxList.at(1) = rotIdx;
