@@ -38,6 +38,7 @@ std::vector<CallInst *> BitSliceAlloc;
 std::vector<CallInst *> UnBitSliceCalls;
 std::vector<StringRef> Descriptions;
 std::vector<StringRef> AllocOldNames;
+std::vector<AllocaInst *> AllocInstBuff;
 std::vector<AllocaInst *> AllocNewInstBuff;
 std::vector<StringRef> BitSlicedAllocNames;
 std::vector<AllocaInst *> BitSlicedAllocInstBuff;
@@ -440,7 +441,6 @@ void OrthogonalTransformation(CallInst *call, StringRef Description){
 	IdxList.push_back(idxZero);
 	IdxList.push_back(idxZero);
 	uint64_t arraySize;
-	int selectOperand = 0;
 	
 	StringRef op;
 	std::vector<StringRef> tokens;
@@ -450,11 +450,15 @@ void OrthogonalTransformation(CallInst *call, StringRef Description){
 	
 	bool preOp, postOp, end, 
 		 foundLeftOperand, foundRightOperand, foundDestOperand,
-		 globalRightOperand, constantRightOperand;
+		 globalRightOperand, constantRightOperand,
+		 notBitSlicedLeftOperand, notBitSlicedRightOperand,
+		 rangedLeftOperand, rangedRightOperand, rangedDestOperand;
 	
 	preOp = postOp = end = 
 	foundLeftOperand = foundRightOperand = foundDestOperand = 
-	globalRightOperand = constantRightOperand = false;
+	globalRightOperand = constantRightOperand = 
+	notBitSlicedLeftOperand = notBitSlicedRightOperand = 
+	rangedLeftOperand = rangedRightOperand = rangedDestOperand = false;
 	
 	size_t i, pos, count;
 	for(i=0, pos=0; !end;){
@@ -582,9 +586,30 @@ void OrthogonalTransformation(CallInst *call, StringRef Description){
 				allDOper = cast<AllocaInst>(AllocNewInstBuff.at(i));
 				foundDestOperand = true;
 			}
-			if(foundLeftOperand && foundRightOperand && foundDestOperand) break;
+			if((foundLeftOperand || foundRightOperand) && foundDestOperand) break;
 		}
 		
+		if(!(foundLeftOperand || foundRightOperand)){
+			errs() << "warning: trying to transpose an operation with no bit-sliced operands\n";
+		}
+		
+		if(!foundLeftOperand){
+			for(i=0; i<AllocInstBuff.size(); i++){
+				if(AllocInstBuff.at(i)->getName().equals(leftOperand.at(0))){
+					allLOper = cast<AllocaInst>(AllocInstBuff.at(i));
+					notBitSlicedLeftOperand = true;
+				}
+			}
+		}
+		
+		if(!foundRightOperand){
+			for(i=0; i<AllocInstBuff.size(); i++){
+				if(AllocInstBuff.at(i)->getName().equals(rightOperand.at(0))){
+					allROper = cast<AllocaInst>(AllocInstBuff.at(i));
+					notBitSlicedRightOperand = true;
+				}
+			}
+		}
 		
 		if(leftOperand.at(1).equals("all") && rightOperand.at(1).equals("all")){
 			arraySize = cast<ArrayType>(allLOper->getAllocatedType())->getNumElements();
@@ -647,7 +672,7 @@ void OrthogonalTransformation(CallInst *call, StringRef Description){
 
 //bits are universal, while the element size may depend... why don't we make the user express the range
 //in terms of bits?
-		uint64_t rangeBeginLOp, rangeEndLOp, rangeBeginROp, rangeEndROp, range = 0;
+		uint64_t rangeBeginLOp, rangeEndLOp, rangeBeginROp, rangeEndROp, rangeBeginDOp, rangeEndDOp, range = 0;
 		if(leftOperand.at(1).equals("range") || rightOperand.at(1).equals("range")){
 			pos = StringRef::npos;
 			if(leftOperand.at(1).equals("range"))
@@ -657,7 +682,7 @@ void OrthogonalTransformation(CallInst *call, StringRef Description){
 				pos++;
 				rangeEndLOp = std::stoi(leftOperand.at(2).substr(pos, leftOperand.at(2).size()-1).str());
 				range = rangeEndLOp - rangeBeginLOp + 1;		//first and last bits included
-				selectOperand = 0;
+				rangedLeftOperand = true;
 			}
 			pos = StringRef::npos;
 			if(rightOperand.at(1).equals("range"))
@@ -667,7 +692,17 @@ void OrthogonalTransformation(CallInst *call, StringRef Description){
 				pos++;
 				rangeEndROp = std::stoi(rightOperand.at(2).substr(pos, rightOperand.at(2).size()-1).str());
 				range = rangeEndROp - rangeBeginROp + 1;
-				selectOperand = 1;
+				rangedRightOperand = true;
+			}
+			pos = StringRef::npos;
+			if(destOperand.at(1).equals("range"))
+				pos = destOperand.at(2).find(",", 0);		
+			if(pos != StringRef::npos){
+				rangeBeginDOp = std::stoi(destOperand.at(2).substr(0, pos).str());
+				pos++;
+				rangeEndDOp = std::stoi(destOperand.at(2).substr(pos, destOperand.at(2).size()-1).str());
+				range = rangeEndDOp - rangeBeginDOp + 1;
+				rangedDestOperand = true;
 			}
 			
 			if(leftOperand.at(1).equals("range") && rightOperand.at(1).equals("range")){
@@ -701,26 +736,63 @@ void OrthogonalTransformation(CallInst *call, StringRef Description){
 			Value *cmp = forCondBuilder.CreateICmpSLT(idx, ConstantInt::get(idxTy, range), "cmp");
 			
 			BasicBlock *forBody = BasicBlock::Create(Context, "for.body", call->getFunction(), forEnd);
-			forCondBuilder.CreateCondBr(cmp, forBody, forEnd);
-			
+			forCondBuilder.CreateCondBr(cmp, forBody, forEnd);	
 			IRBuilder<> forBodyBuilder(forBody);
 			idx = forBodyBuilder.CreateLoad(idxAlloca, "idxprom");
 			IdxList.at(1) = idx;
-			if(selectOperand == 0){
+			if(rangedLeftOperand){
 				Value *addOffset = forBodyBuilder.CreateAdd(idx, ConstantInt::get(idxTy, rangeBeginLOp), "offset");
 				IdxList.at(1) = addOffset;
 			}
-			LOper = forBodyBuilder.CreateGEP(allLOper, ArrayRef <Value *>(IdxList), "LOper");
-			LOper = forBodyBuilder.CreateLoad(LOper);
+			if(notBitSlicedLeftOperand){
+				LOper = forBodyBuilder.CreateLoad(allLOper);
+				if(rangedLeftOperand){
+					Value *offset = forBodyBuilder.CreateNSWAdd(idx, ConstantInt::get(idxTy, rangeBeginLOp), "offset");
+					LOper = forBodyBuilder.CreateSExt(LOper, idxTy);
+					LOper = forBodyBuilder.CreateLShr(LOper, offset);
+				}else{
+					LOper = forBodyBuilder.CreateLShr(LOper, idx);
+				}
+				LOper = forBodyBuilder.CreateAnd(LOper, ConstantInt::get(idxTy, 1));
+				LOper = forBodyBuilder.CreateSExt(LOper, sliceTy);
+			}else{
+				if(rangedLeftOperand){
+					Value *addOffset = forBodyBuilder.CreateAdd(idx, ConstantInt::get(idxTy, rangeBeginLOp), "offset");
+					IdxList.at(1) = addOffset;
+				}
+				LOper = forBodyBuilder.CreateGEP(allLOper, ArrayRef <Value *>(IdxList), "LOper");
+				LOper = forBodyBuilder.CreateLoad(LOper);
+			}
 			IdxList.at(1) = idx;
-			if(selectOperand == 1){
+			if(rangedRightOperand){
 				Value *addOffset = forBodyBuilder.CreateAdd(idx, ConstantInt::get(idxTy, rangeBeginROp), "offset");
 				IdxList.at(1) = addOffset;
 			}
-			ROper = forBodyBuilder.CreateGEP(allROper, ArrayRef <Value *>(IdxList), "ROper");
-			ROper = forBodyBuilder.CreateLoad(ROper);
+			if(notBitSlicedRightOperand){
+				ROper = forBodyBuilder.CreateLoad(allROper);
+				if(rangedLeftOperand){
+					Value *offset = forBodyBuilder.CreateNSWAdd(idx, ConstantInt::get(idxTy, rangeBeginROp), "offset");
+					ROper = forBodyBuilder.CreateSExt(ROper, idxTy);
+					ROper = forBodyBuilder.CreateLShr(ROper, offset);
+				}else{
+					ROper = forBodyBuilder.CreateLShr(ROper, idx);
+				}
+				ROper = forBodyBuilder.CreateAnd(ROper, ConstantInt::get(idxTy, 1));
+				ROper = forBodyBuilder.CreateTrunc(ROper, sliceTy);
+			}else{
+				if(rangedRightOperand){
+					Value *addOffset = forBodyBuilder.CreateAdd(idx, ConstantInt::get(idxTy, rangeBeginROp), "offset");
+					IdxList.at(1) = addOffset;
+				}
+				ROper = forBodyBuilder.CreateGEP(allROper, ArrayRef <Value *>(IdxList), "ROper");
+				ROper = forBodyBuilder.CreateLoad(ROper);
+			}
 			Value *res = forBodyBuilder.CreateXor(LOper, ROper, "xor");
 			IdxList.at(1) = idx;
+			if(rangedDestOperand){
+				Value *addOffset = forBodyBuilder.CreateAdd(idx, ConstantInt::get(idxTy, rangeBeginDOp), "offset");
+				IdxList.at(1) = addOffset;
+			}
 			DOper = forBodyBuilder.CreateGEP(allDOper, ArrayRef <Value *>(IdxList), "DOper");
 			forBodyBuilder.CreateStore(res, DOper);
 			
@@ -1173,6 +1245,9 @@ namespace{
 					
 						}
 					}
+					
+					if(auto *all = dyn_cast<AllocaInst>(&I))
+						AllocInstBuff.push_back(all);
 					
 					if(I.getMetadata("bitsliced")){
 						
