@@ -181,6 +181,7 @@ bool GetUnBitSlicedData(CallInst *call, LLVMContext &Context){
 
 bool BitSlice(CallInst *call, LLVMContext &Context){
 	IRBuilder<> builder(call);
+	uint64_t blocks = cast<ConstantInt>(call->getArgOperand(1))->getZExtValue();
 /*	
 	BasicBlock *Pred = call->getParent();
 	BasicBlock *Succ = call->getParent()->splitBasicBlock(call, "for(alloca).end");
@@ -198,13 +199,24 @@ bool BitSlice(CallInst *call, LLVMContext &Context){
 		return false;
 	}
 	uint64_t oldSize = cast<ArrayType>(oldAlloca->getAllocatedType())->getNumElements();
-	MDNode *MData = MDNode::get(Context, 
-								MDString::get(Context, "bit-sliced"));
-	oldAlloca->setMetadata("bit-sliced", MData);
+	
+	MDNode *MData;
+	if(blocks > 1){
+		MData = MDNode::get(Context, 
+							MDString::get(Context, "bit-sliced-multi"));
+		oldAlloca->setMetadata("bit-sliced-m", MData);
+	}else if(blocks == 1){
+		MData = MDNode::get(Context, 
+							MDString::get(Context, "bit-sliced"));
+		oldAlloca->setMetadata("bit-sliced", MData);
+	}
+	
 	//oldAlloca->replaceAllUsesWith(oldAlloca);
 	
 	Type *sliceTy = IntegerType::getInt32Ty(Context);
-	ArrayType *arrTy = ArrayType::get(sliceTy, (oldSize/32)*8);		//FIXME: need to make it type dependant.
+	ArrayType *arrTy;
+	arrTy = ArrayType::get(sliceTy, (oldSize/blocks)*8);		//FIXME: need to make it type dependant.
+	
 	AllocaInst *all = builder.CreateAlloca(arrTy, 0, "SLICES");
 	AllocNewInstBuff.push_back(all);
 	
@@ -219,8 +231,10 @@ bool BitSlice(CallInst *call, LLVMContext &Context){
 	Value *Byte;
 	Value *bitVal;
 	Value *sliceAddr;
-	int BitSizeOfInput = (oldSize/32)*8;
-	
+	int BitSizeOfInput = (oldSize/blocks)*8;
+
+if(blocks > 1){			//FIXME: ADD THIS WARNING IN THE DOCUMENTATION: if a different size of the program dependent on the number of blocks processed in parallel is not an issue and you want more efficiency you'd better specify that you use just 1 block. If the different size of the program is an issue you should put always 32 as number of blocks (or the maximum value you use in your program). In that case, ALLOCATE FOR 32 BLOCKS AS WELL, AND FILL THE REMAINING SPACE WITH ZEROS!!
+
 	AllocaInst *idxAlloca = builder.CreateAlloca(idxTy, 0, "idx_i");
 	AllocaInst *idx2Alloca = builder.CreateAlloca(idxTy, 0, "idx_j");
 	AllocaInst *tmpAlloca = builder.CreateAlloca(sliceTy, 0, "tmp");
@@ -248,17 +262,17 @@ bool BitSlice(CallInst *call, LLVMContext &Context){
 	
 	IRBuilder<> forCond2Builder(forCond2);
 	Value *idx2 = forCond2Builder.CreateLoad(idx2Alloca);
-	Value *cmp2 = forCond2Builder.CreateICmpSLT(idx2, ConstantInt::get(idxTy, 32), "cmp");
+	Value *cmp2 = forCond2Builder.CreateICmpSLT(idx2, ConstantInt::get(idxTy, blocks), "cmp");
 	BasicBlock *forBody2 = BasicBlock::Create(Context, "for.body", call->getFunction(), forEnd);
 	BasicBlock *forEnd2 = BasicBlock::Create(Context, "for.end", call->getFunction(), forEnd);
 	forCond2Builder.CreateCondBr(cmp2, forBody2, forEnd2);
 //	
 	IRBuilder<> forBody2Builder(forBody2);
 	idx = forBody2Builder.CreateLoad(idxAlloca, "idxprom");
-	Value *div = forBody2Builder.CreateSDiv(idx, ConstantInt::get(idxTy, 8), "div");
+	Value *div = forBody2Builder.CreateSDiv(idx, ConstantInt::get(idxTy, 8), "div"); //coloumn i = 0, 1,... #input-elements
 	idx2 = forBody2Builder.CreateLoad(idx2Alloca, "idxprom");
 	//Value *div2 = forBody2Builder.CreateSDiv(idx2, ConstantInt::get(idxTy, 8), "div");
-	Value *mul = forBody2Builder.CreateNSWMul(idx2, ConstantInt::get(idxTy, BitSizeOfInput/8), "mul");
+	Value *mul = forBody2Builder.CreateNSWMul(idx2, ConstantInt::get(idxTy, BitSizeOfInput/8), "mul"); //row j*sizeof(row)
 	Value *add = forBody2Builder.CreateNSWAdd(div, mul, "add");
 	IdxList.at(1) = add;
 	Byte = forBody2Builder.CreateGEP(oldAlloca, ArrayRef <Value *>(IdxList));
@@ -293,6 +307,72 @@ bool BitSlice(CallInst *call, LLVMContext &Context){
 	inc = forIncBuilder.CreateNSWAdd(inc, ConstantInt::get(idxTy, 1), "inc");
 	forIncBuilder.CreateStore(inc, idxAlloca);
 	forIncBuilder.CreateBr(forCond);
+
+}else if(blocks == 1){
+	
+	AllocaInst *idxAlloca = builder.CreateAlloca(idxTy, 0, "idx_i");
+	AllocaInst *idx2Alloca = builder.CreateAlloca(idxTy, 0, "idx_j");
+	builder.CreateStore(idxZero, idxAlloca);
+	builder.CreateStore(idxZero, idx2Alloca);
+	BasicBlock *forEnd = call->getParent()->splitBasicBlock(call, "for.end");
+	
+	BasicBlock *forCond = BasicBlock::Create(Context, "for.cond", call->getFunction(), forEnd);
+	idxAlloca->getParent()->getTerminator()->setSuccessor(0, forCond);
+
+	IRBuilder<> forCondBuilder(forCond);
+	Value *idx = forCondBuilder.CreateLoad(idxAlloca);
+	Value *cmp = forCondBuilder.CreateICmpSLT(idx, ConstantInt::get(idxTy, BitSizeOfInput/8), "cmp");
+	BasicBlock *forBody = BasicBlock::Create(Context, "for.body", call->getFunction(), forEnd);
+	forCondBuilder.CreateCondBr(cmp, forBody, forEnd);
+	
+	IRBuilder<> forBodyBuilder(forBody);
+	idx = forBodyBuilder.CreateLoad(idxAlloca, "idxprom");
+	//Value *div = forBodyBuilder.CreateSDiv(idx, ConstantInt::get(idxTy, 8), "div"); //8, #bits per element
+	IdxList.at(1) = idx;
+	Byte = forBodyBuilder.CreateGEP(oldAlloca, ArrayRef <Value *>(IdxList));
+	Byte = forBodyBuilder.CreateLoad(Byte);
+	bitVal = forBodyBuilder.CreateZExt(Byte, sliceTy);
+	forBodyBuilder.CreateStore(idxZero, idx2Alloca);
+	BasicBlock *forCond2 = BasicBlock::Create(Context, "for.cond", call->getFunction(), forEnd);
+	forBodyBuilder.CreateBr(forCond2);
+	
+	IRBuilder<> forCond2Builder(forCond2);
+	Value *idx2 = forCond2Builder.CreateLoad(idx2Alloca);
+	Value *cmp2 = forCond2Builder.CreateICmpSLT(idx2, ConstantInt::get(idxTy, 8), "cmp");	//8, #bits per element
+	BasicBlock *forBody2 = BasicBlock::Create(Context, "for.body", call->getFunction(), forEnd);
+	BasicBlock *forEnd2 = BasicBlock::Create(Context, "for.end", call->getFunction(), forEnd);
+	forCond2Builder.CreateCondBr(cmp2, forBody2, forEnd2);
+	
+	IRBuilder<> forBody2Builder(forBody2);
+	//Value *bitShift = forBody2Builder.CreateSRem(idx, ConstantInt::get(idxTy, 8));
+	idx2 = forBody2Builder.CreateLoad(idx2Alloca);
+	Value *bitShift = forBody2Builder.CreateTrunc(idx2, sliceTy);
+	bitVal = forBody2Builder.CreateLShr(bitVal, bitShift);
+	bitVal = forBody2Builder.CreateAnd(bitVal, ConstantInt::get(sliceTy, 1));
+	IdxList.at(1) = idx2;
+	sliceAddr = forBody2Builder.CreateGEP(all, ArrayRef <Value *>(IdxList), "sliceAddr");
+	forBody2Builder.CreateStore(bitVal, sliceAddr);
+	BasicBlock *forInc2 = BasicBlock::Create(Context, "for.inc", call->getFunction(), forEnd2);
+	forBody2Builder.CreateBr(forInc2);
+	
+	IRBuilder<> forInc2Builder(forInc2);
+	Value *inc2 = forInc2Builder.CreateLoad(idx2Alloca);
+	inc2 = forInc2Builder.CreateNSWAdd(inc2, ConstantInt::get(idxTy, 1), "inc");
+	forInc2Builder.CreateStore(inc2, idx2Alloca);
+	forInc2Builder.CreateBr(forCond2);
+	
+	IRBuilder<> forEnd2Builder(forEnd2);
+	//Value *newSlice = forEnd2Builder.CreateLoad(tmpAlloca);
+	//forEnd2Builder.CreateStore(newSlice, sliceAddr);
+	BasicBlock *forInc = BasicBlock::Create(Context, "for.inc", call->getFunction(), forEnd);
+	forEnd2Builder.CreateBr(forInc);
+	
+	IRBuilder<> forIncBuilder(forInc);
+	Value *inc = forIncBuilder.CreateLoad(idxAlloca);
+	inc = forIncBuilder.CreateNSWAdd(inc, ConstantInt::get(idxTy, 1), "inc");
+	forIncBuilder.CreateStore(inc, idxAlloca);
+	forIncBuilder.CreateBr(forCond);
+}
 
 /*	
 	for( i = 0; i < BitSizeOfInput; i++ ){

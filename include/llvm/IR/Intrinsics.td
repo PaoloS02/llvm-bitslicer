@@ -736,7 +736,7 @@ def int_bitsliced_i8_bit : GCCBuiltin<"__builtin_i8_bit">,
   	Intrinsic<[llvm_i8_ty], [llvm_i8_ty, llvm_i32_ty], []>;
 
 def int_bitslice_i32 : GCCBuiltin<"__builtin_i32_bitslice">,
-	Intrinsic<[], [LLVMPointerType<llvm_i8_ty>]>;
+	Intrinsic<[], [LLVMPointerType<llvm_i8_ty>, llvm_i32_ty]>;
 
 def int_unbitslice_i32 : GCCBuiltin<"__builtin_i32_unbitslice">,
 	Intrinsic<[], [LLVMPointerType<llvm_i8_ty>]>;
