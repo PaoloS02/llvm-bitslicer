@@ -205,13 +205,53 @@ bool BitSlice(CallInst *call, LLVMContext &Context){
 	MDNode *MData;
 	if(blocks > 1){
 		MData = MDNode::get(Context, 
-							MDString::get(Context, "bit-sliced-m"));
+							MDString::get(Context, "bit-sliced-multi"));
 		oldAlloca->setMetadata("bit-sliced-multi", MData);
 	}else if(blocks == 1){
 		MData = MDNode::get(Context, 
 							MDString::get(Context, "bit-sliced"));
 		oldAlloca->setMetadata("bit-sliced", MData);
 	}
+	
+	for(auto& U : oldAlloca->uses()){
+		User *user = U.getUser();
+		
+		auto *Inst = dyn_cast<Instruction>(user);
+		MDNode *mdata = MDNode::get(oldAlloca->getContext(), 
+									MDString::get(oldAlloca->getContext(), "to_be_bit-sliced"));
+		Inst->setMetadata("to_be_bit-sliced", mdata);
+	}
+	
+	bool mark = false;
+	Module *M = call->getModule();
+	for(Function& F : *M){
+		for(BasicBlock& B : F){
+			for(Instruction& I : B){
+				if(auto *tmpCall = dyn_cast<CallInst>(&I)){
+					if(tmpCall == call)
+						mark = true;
+				}
+				if(I.getMetadata("to_be_bit-sliced") && mark){
+					MDNode *mdata = MDNode::get(I.getContext(), 
+									MDString::get(I.getContext(), "to_be_transformed"));
+					I.setMetadata("to_be_transformed", mdata);
+				}
+			}
+			//B.dump();
+		}
+	}
+	
+	/*for(auto& U : oldAlloca->uses()){
+		User *user = U.getUser();
+		
+		if(user == call->getArgOperand(0)->getUser())
+		//user->dump();
+		auto *Inst = dyn_cast<Instruction>(user);
+		MDNode *mdata = MDNode::get(I.getContext(), 
+									MDString::get(I.getContext(), "bitsliced"));
+		Inst->setMetadata("bitsliced", mdata);
+	}
+	*/
 	
 	//oldAlloca->replaceAllUsesWith(oldAlloca);
 	
@@ -1410,6 +1450,10 @@ namespace{
 					
 					if(auto *all = dyn_cast<AllocaInst>(&I))
 						AllocInstBuff.push_back(all);
+						
+					if(I.getMetadata("bit-sliced") || I.getMetadata("bit-sliced-multi")) {
+						
+					}
 					
 					if(I.getMetadata("bitsliced")){
 						
@@ -1464,14 +1508,14 @@ namespace{
 							int i = 0;
 							int j = 0;
 							if(auto *stPtr = dyn_cast<Instruction>(st->getPointerOperand())){
-								if(stPtr->getMetadata("bitsliced"))	
-									IsBitSlicedPtr = true;			
-							}					
+								if(stPtr->getMetadata("bitsliced"))
+									IsBitSlicedPtr = true;
+							}
 						/*	if(auto *stVal = dyn_cast<Instruction>(st->getValueOperand())){
 								if(stVal->getMetadata("bitsliced"))
 									IsBitSlicedVal = true;
 							}
-						*/	
+						*/
 							if(IsBitSlicedPtr){
 								Type *sliceTy = IntegerType::getInt8Ty(I.getModule()->getContext());	//FIXME:SENSIBLE DATA TYPE SELECTABLE?
 								Type *idxTy = IntegerType::getInt64Ty(I.getModule()->getContext());
