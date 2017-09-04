@@ -212,17 +212,47 @@ bool BitSlice(CallInst *call, LLVMContext &Context){
 							MDString::get(Context, "bit-sliced"));
 		oldAlloca->setMetadata("bit-sliced", MData);
 	}
-	
+
+/*	
+	bool mark = false;
 	for(auto& U : oldAlloca->uses()){
 		User *user = U.getUser();
-		
+errs() << __LINE__ << "\n";		
 		auto *Inst = dyn_cast<Instruction>(user);
+		
+		if(auto *GEPInst = dyn_cast<GetElementPtrInst>(Inst)){
+			
+		}
+Inst->dump();
+		if(auto *dualCall = dyn_cast<CallInst>(Inst)){
+errs() << __LINE__ << "\n";
+			Function *Fn = dualCall->getCalledFunction();
+			if(Fn && Fn->getIntrinsicID() == Intrinsic::bitslice_i32){
+errs() << __LINE__ << "\n";
+				mark = true;
+			}
+			if(Fn && Fn->getIntrinsicID() == Intrinsic::unbitslice_i32){
+
+				mark = false;
+			}
+		}
+		
+		if(mark){
+	errs() << __LINE__ << "\n";
+			MDNode *mdata = MDNode::get(oldAlloca->getContext(), 
+										MDString::get(oldAlloca->getContext(), "to_be_bit-sliced"));
+			Inst->setMetadata("to_be_bit-sliced", mdata);
+		}
+	}
+*/
+	for(auto& U : oldAlloca->uses()){
+		User *user = U.getUser();
 		MDNode *mdata = MDNode::get(oldAlloca->getContext(), 
-									MDString::get(oldAlloca->getContext(), "to_be_bit-sliced"));
+										MDString::get(oldAlloca->getContext(), "to_be_bit-sliced"));
+		auto *Inst = cast<Instruction>(user);
 		Inst->setMetadata("to_be_bit-sliced", mdata);
 	}
-	
-	bool mark = false;
+	/*
 	Module *M = call->getModule();
 	for(Function& F : *M){
 		for(BasicBlock& B : F){
@@ -240,7 +270,7 @@ bool BitSlice(CallInst *call, LLVMContext &Context){
 			//B.dump();
 		}
 	}
-	
+	*/
 	/*for(auto& U : oldAlloca->uses()){
 		User *user = U.getUser();
 		
@@ -454,6 +484,27 @@ bool UnBitSlice(CallInst *call, LLVMContext &Context){
 		}
 		i++;
 	}
+	
+	/*
+	bool mark = false;
+	Module *M = call->getModule();
+	for(Function& F : *M){
+		for(BasicBlock& B : F){
+			for(Instruction& I : B){
+				if(auto *tmpCall = dyn_cast<CallInst>(&I)){
+					if(tmpCall == call)
+						mark = true;
+				}
+				if(I.getMetadata("to_be_bit-sliced") && mark){
+					MDNode *mdata = MDNode::get(I.getContext(),
+									MDString::get(I.getContext(), "to_be_transformed"));
+					I.setMetadata("to_be_transformed", mdata);
+				}
+			}
+			//B.dump();
+		}
+	}
+	*/
 	
 	AllocaInst *slicesAlloca = AllocNewInstBuff.at(i);
 	uint64_t blocks = BlocksNumList.at(i);
