@@ -43,6 +43,7 @@ std::vector<AllocaInst *> AllocNewInstBuff;
 std::vector<StringRef> BitSlicedAllocNames;
 std::vector<AllocaInst *> BitSlicedAllocInstBuff;
 std::vector<uint64_t> BlocksNumList;
+std::vector<uint64_t> ArgSizes;
 
 
 
@@ -54,7 +55,7 @@ bool GetBitSlicedData(CallInst *call, LLVMContext &Context){
 	AllocaInst *blocksAlloca = cast<AllocaInst>(inputSize);
 	if(!isa<ArrayType>(blocksAlloca->getAllocatedType())){
 		errs() << "ERROR: argument 1 not a static array\n";
-		return false;
+	//	return false;
 	}
 	uint64_t oldSize = cast<ArrayType>(blocksAlloca->getAllocatedType())->getNumElements();
 		
@@ -64,7 +65,7 @@ bool GetBitSlicedData(CallInst *call, LLVMContext &Context){
 	
 	if(!isa<ArrayType>(slicesAlloca->getAllocatedType())){
 		errs() << "ERROR: argument 1 not a static array\n";
-		return false;
+	//	return false;
 	}
 	uint64_t newSize = dyn_cast<ArrayType>(slicesAlloca->getAllocatedType())->getNumElements();	
 	
@@ -122,7 +123,7 @@ bool GetUnBitSlicedData(CallInst *call, LLVMContext &Context){
 	
 	if(!isa<ArrayType>(slicesAlloca->getAllocatedType())){
 		errs() << "ERROR: argument 1 not a static array\n";
-		return false;
+	//	return false;
 	}
 	uint64_t oldSize = cast<ArrayType>(slicesAlloca->getAllocatedType())->getNumElements();
 	
@@ -132,7 +133,7 @@ bool GetUnBitSlicedData(CallInst *call, LLVMContext &Context){
 	
 	if(!isa<ArrayType>(outputAlloca->getAllocatedType())){
 		errs() << "ERROR: argument 1 not a static array\n";
-		return false;
+	//	return false;
 	}
 	uint64_t newSize = cast<ArrayType>(outputAlloca->getAllocatedType())->getNumElements();
 	
@@ -182,8 +183,12 @@ bool GetUnBitSlicedData(CallInst *call, LLVMContext &Context){
 
 bool BitSlice(CallInst *call, LLVMContext &Context){
 	IRBuilder<> builder(call);
+errs() << __LINE__ << "\n";
 	uint64_t blocks = cast<ConstantInt>(call->getArgOperand(1))->getZExtValue();
+errs() << __LINE__ << "\n";
 	BlocksNumList.push_back(blocks);
+
+//	bool isPtr = false;
 /*	
 	BasicBlock *Pred = call->getParent();
 	BasicBlock *Succ = call->getParent()->splitBasicBlock(call, "for(alloca).end");
@@ -194,14 +199,22 @@ bool BitSlice(CallInst *call, LLVMContext &Context){
 	Instruction *inputSize = cast<Instruction>(call->getArgOperand(0));
 	for(; !isa<AllocaInst>(inputSize); inputSize = cast<Instruction>(inputSize->getOperand(0)));
 	AllocaInst *oldAlloca = cast<AllocaInst>(inputSize);
+//	if(oldAlloca->getAllocatedType()->isPointerTy())
+//		isPtr = true;
 	AllocOldNames.push_back(oldAlloca->getName());
-	
+errs() << __LINE__ << "\n";	
 	if(!isa<ArrayType>(oldAlloca->getAllocatedType())){
 		errs() << "ERROR: argument 1 not a static array\n";
-		return false;
+	//	return false;
 	}
-	uint64_t oldSize = cast<ArrayType>(oldAlloca->getAllocatedType())->getNumElements();
+errs() << __LINE__ << "\n";
 	
+//	if(isa<ArrayType>(oldAlloca->getAllocatedType())) //prendi il numero del parametro e cerca il parametro con la stessa posizione nell'invocazione di questa funzione nella funzione chiamante.
+	//LLVMGetParams(call->getFunction(), params);
+	int argIdx = 0;
+	for(auto arg : call->getFunction()->args());
+	uint64_t oldSize = cast<ArrayType>(oldAlloca->getAllocatedType())->getNumElements();
+errs() << __LINE__ << "\n";	
 	MDNode *MData;
 	if(blocks > 1){
 		MData = MDNode::get(Context, 
@@ -284,7 +297,7 @@ errs() << __LINE__ << "\n";
 	*/
 	
 	//oldAlloca->replaceAllUsesWith(oldAlloca);
-	
+errs() << __LINE__ << "\n";	
 	Type *sliceTy = IntegerType::getInt32Ty(Context);
 	ArrayType *arrTy;
 	arrTy = ArrayType::get(sliceTy, (oldSize/blocks)*8);		//FIXME: need to make it type dependant.
@@ -293,18 +306,22 @@ errs() << __LINE__ << "\n";
 	AllocNewInstBuff.push_back(all);
 	
 	//int i, j;
-	
+errs() << __LINE__ << "\n";	
 	std::vector<Value *> IdxList;
+	std::vector<Value *> SliceIdxList;
 	Type *idxTy = IntegerType::getInt64Ty(Context);
 	Value *idxZero = ConstantInt::get(idxTy, 0);
 	IdxList.push_back(idxZero);
-	IdxList.push_back(idxZero);
+	if(!oldAlloca->getAllocatedType()->isPointerTy())	
+		IdxList.push_back(idxZero);
+	SliceIdxList.push_back(idxZero);
+	SliceIdxList.push_back(idxZero);
 	Value *tmp;
 	Value *Byte;
 	Value *bitVal;
 	Value *sliceAddr;
 	int BitSizeOfInput = (oldSize/blocks)*8;
-
+errs() << __LINE__ << "\n";
 if(blocks > 1){			//FIXME: ADD THIS WARNING IN THE DOCUMENTATION: if a different size of the program dependent on the number of blocks processed in parallel is not an issue and you want more efficiency you'd better specify that you use just 1 block. If the different size of the program is an issue you should put always 32 as number of blocks (or the maximum value you use in your program). In that case, ALLOCATE FOR 32 BLOCKS AS WELL, AND FILL THE REMAINING SPACE WITH ZEROS!!
 
 	AllocaInst *idxAlloca = builder.CreateAlloca(idxTy, 0, "idx_i");
@@ -327,7 +344,7 @@ if(blocks > 1){			//FIXME: ADD THIS WARNING IN THE DOCUMENTATION: if a different
 	forBodyBuilder.CreateStore(ConstantInt::get(sliceTy, 0), tmpAlloca);
 	forBodyBuilder.CreateStore(idxZero, idx2Alloca);
 	idx = forBodyBuilder.CreateLoad(idxAlloca, "idxprom");
-	IdxList.at(1) = idx;
+	SliceIdxList.at(1) = idx;
 	sliceAddr = forBodyBuilder.CreateGEP(all, ArrayRef <Value *>(IdxList), "sliceAddr");
 	BasicBlock *forCond2 = BasicBlock::Create(Context, "for.cond", call->getFunction(), forEnd);
 	forBodyBuilder.CreateBr(forCond2);
@@ -346,7 +363,10 @@ if(blocks > 1){			//FIXME: ADD THIS WARNING IN THE DOCUMENTATION: if a different
 	//Value *div2 = forBody2Builder.CreateSDiv(idx2, ConstantInt::get(idxTy, 8), "div");
 	Value *mul = forBody2Builder.CreateNSWMul(idx2, ConstantInt::get(idxTy, BitSizeOfInput/8), "mul"); //row j*sizeof(row)
 	Value *add = forBody2Builder.CreateNSWAdd(div, mul, "add");
-	IdxList.at(1) = add;
+	if(oldAlloca->getAllocatedType()->isPointerTy())
+		IdxList.at(0) = add;
+	else
+		IdxList.at(1) = add;
 	Byte = forBody2Builder.CreateGEP(oldAlloca, ArrayRef <Value *>(IdxList));
 	Byte = forBody2Builder.CreateLoad(Byte);
 	tmp = forBody2Builder.CreateLoad(tmpAlloca);
@@ -379,9 +399,9 @@ if(blocks > 1){			//FIXME: ADD THIS WARNING IN THE DOCUMENTATION: if a different
 	inc = forIncBuilder.CreateNSWAdd(inc, ConstantInt::get(idxTy, 1), "inc");
 	forIncBuilder.CreateStore(inc, idxAlloca);
 	forIncBuilder.CreateBr(forCond);
-
+errs() << __LINE__ << "\n";
 }else if(blocks == 1){
-	
+errs() << __LINE__ << "\n";	
 	AllocaInst *idxAlloca = builder.CreateAlloca(idxTy, 0, "idx_i");
 	AllocaInst *idx2Alloca = builder.CreateAlloca(idxTy, 0, "idx_j");
 	builder.CreateStore(idxZero, idxAlloca);
@@ -396,25 +416,28 @@ if(blocks > 1){			//FIXME: ADD THIS WARNING IN THE DOCUMENTATION: if a different
 	Value *cmp = forCondBuilder.CreateICmpSLT(idx, ConstantInt::get(idxTy, BitSizeOfInput/8), "cmp");
 	BasicBlock *forBody = BasicBlock::Create(Context, "for.body", call->getFunction(), forEnd);
 	forCondBuilder.CreateCondBr(cmp, forBody, forEnd);
-	
+errs() << __LINE__ << "\n";	
 	IRBuilder<> forBodyBuilder(forBody);
 	idx = forBodyBuilder.CreateLoad(idxAlloca, "idxprom");
 	//Value *div = forBodyBuilder.CreateSDiv(idx, ConstantInt::get(idxTy, 8), "div"); //8, #bits per element
-	IdxList.at(1) = idx;
+	if(oldAlloca->getAllocatedType()->isPointerTy())
+		IdxList.at(0) = idx;
+	else
+		IdxList.at(1) = idx;
 	Byte = forBodyBuilder.CreateGEP(oldAlloca, ArrayRef <Value *>(IdxList));
 	Byte = forBodyBuilder.CreateLoad(Byte);
 	bitVal = forBodyBuilder.CreateZExt(Byte, sliceTy);
 	forBodyBuilder.CreateStore(idxZero, idx2Alloca);
 	BasicBlock *forCond2 = BasicBlock::Create(Context, "for.cond", call->getFunction(), forEnd);
 	forBodyBuilder.CreateBr(forCond2);
-	
+errs() << __LINE__ << "\n";	
 	IRBuilder<> forCond2Builder(forCond2);
 	Value *idx2 = forCond2Builder.CreateLoad(idx2Alloca);
 	Value *cmp2 = forCond2Builder.CreateICmpSLT(idx2, ConstantInt::get(idxTy, 8), "cmp");	//8, #bits per element
 	BasicBlock *forBody2 = BasicBlock::Create(Context, "for.body", call->getFunction(), forEnd);
 	BasicBlock *forEnd2 = BasicBlock::Create(Context, "for.end", call->getFunction(), forEnd);
 	forCond2Builder.CreateCondBr(cmp2, forBody2, forEnd2);
-	
+errs() << __LINE__ << "\n";	
 	IRBuilder<> forBody2Builder(forBody2);
 	//Value *bitShift = forBody2Builder.CreateSRem(idx, ConstantInt::get(idxTy, 8));
 	idx2 = forBody2Builder.CreateLoad(idx2Alloca);
@@ -424,12 +447,12 @@ if(blocks > 1){			//FIXME: ADD THIS WARNING IN THE DOCUMENTATION: if a different
 	idx = forBody2Builder.CreateLoad(idxAlloca);
 	Value *idxMul = forBody2Builder.CreateNSWMul(idx, ConstantInt::get(idxTy, 8));
 	Value *idxAdd = forBody2Builder.CreateNSWAdd(idxMul, idx2);
-	IdxList.at(1) = idxAdd;
+	SliceIdxList.at(1) = idxAdd;
 	sliceAddr = forBody2Builder.CreateGEP(all, ArrayRef <Value *>(IdxList), "sliceAddr");
 	forBody2Builder.CreateStore(bitVal, sliceAddr);
 	BasicBlock *forInc2 = BasicBlock::Create(Context, "for.inc", call->getFunction(), forEnd2);
 	forBody2Builder.CreateBr(forInc2);
-	
+errs() << __LINE__ << "\n";	
 	IRBuilder<> forInc2Builder(forInc2);
 	Value *inc2 = forInc2Builder.CreateLoad(idx2Alloca);
 	inc2 = forInc2Builder.CreateNSWAdd(inc2, ConstantInt::get(idxTy, 1), "inc");
@@ -447,6 +470,7 @@ if(blocks > 1){			//FIXME: ADD THIS WARNING IN THE DOCUMENTATION: if a different
 	inc = forIncBuilder.CreateNSWAdd(inc, ConstantInt::get(idxTy, 1), "inc");
 	forIncBuilder.CreateStore(inc, idxAlloca);
 	forIncBuilder.CreateBr(forCond);
+errs() << __LINE__ << "\n";
 }
 
 /*	
@@ -517,7 +541,7 @@ bool UnBitSlice(CallInst *call, LLVMContext &Context){
 	
 	if(!isa<ArrayType>(oldAlloca->getAllocatedType())){
 		errs() << "ERROR: argument 1 not a static array\n";
-		return false;
+	//	return false;
 	}
 	uint64_t oldSize = cast<ArrayType>(oldAlloca->getAllocatedType())->getNumElements();
 	int ByteSizeOfOutput = oldSize/blocks;
@@ -583,7 +607,10 @@ bool UnBitSlice(CallInst *call, LLVMContext &Context){
 		IRBuilder<> forEnd2Builder(forEnd2);
 		Value *newByte = forEnd2Builder.CreateLoad(tmpAlloca);
 		idx = forEnd2Builder.CreateLoad(idxAlloca, "idxprom");
-		IdxList.at(1) = idx;
+		if(oldAlloca->getAllocatedType()->isPointerTy())
+			IdxList.at(0) = idx;
+		else
+			IdxList.at(1) = idx;
 		Value *byteAddr = forEnd2Builder.CreateGEP(oldAlloca, ArrayRef <Value *>(IdxList), "sliceAddr");
 		forEnd2Builder.CreateStore(newByte, byteAddr);
 		BasicBlock *forInc = BasicBlock::Create(Context, "for.inc", call->getFunction(), forEnd);
@@ -652,7 +679,10 @@ bool UnBitSlice(CallInst *call, LLVMContext &Context){
 		IRBuilder<> forEnd2Builder(forEnd2);
 		Value *newByte = forEnd2Builder.CreateLoad(tmpAlloca);
 		idx = forEnd2Builder.CreateLoad(idxAlloca, "idxprom");
-		IdxList.at(1) = idx;
+		if(oldAlloca->getAllocatedType()->isPointerTy())
+			IdxList.at(0) = idx;
+		else
+			IdxList.at(1) = idx;
 		Value *byteAddr = forEnd2Builder.CreateGEP(oldAlloca, ArrayRef <Value *>(IdxList), "byteAddr");
 		forEnd2Builder.CreateStore(newByte, byteAddr);
 		BasicBlock *forInc = BasicBlock::Create(Context, "for.inc", call->getFunction(), forEnd);
@@ -1421,7 +1451,6 @@ namespace{
 		bool runOnModule(Module &M) override {
 		//	int i;
 		
-//		
 		for(Function& F : M){
 			for(BasicBlock& B : F){
 				
@@ -1450,7 +1479,7 @@ namespace{
 						}else if(Fn && Fn->getIntrinsicID() == Intrinsic::bitslice_i32){
 					//		errs() << "args: \n" << call->getNumArgOperands() << "\n";
 							BitSliceAlloc.push_back(call);
-			
+							
 							/*if(!BitSlice(call, I.getModule()->getContext())){
 								errs() << "bit-slicing failed\n";
 							}*/
@@ -1501,9 +1530,26 @@ namespace{
 					
 					if(auto *all = dyn_cast<AllocaInst>(&I))
 						AllocInstBuff.push_back(all);
-						
+				/*		
 					if(I.getMetadata("bit-sliced") || I.getMetadata("bit-sliced-multi")) {
 						
+					}
+				*/	
+					if(I.getMetadata("to_be_bit-sliced")){
+						for(auto& U : I.uses()){
+							User *user = U.getUser();
+							//user->dump();
+							auto *Inst = dyn_cast<Instruction>(user);
+							MDNode *mdata = MDNode::get(I.getContext(), 
+														MDString::get(I.getContext(), "bitsliced"));
+							Inst->setMetadata("to_be_bit-sliced", mdata);
+						}
+						
+						if(auto *gep = dyn_cast<GetElementPtrInst>(&I)){
+						}
+						
+						if(auto *st = dyn_cast<StoreInst>(&I)){
+						}
 					}
 					
 					if(I.getMetadata("bitsliced")){
