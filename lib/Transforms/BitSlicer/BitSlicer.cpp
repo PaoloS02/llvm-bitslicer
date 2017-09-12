@@ -50,14 +50,14 @@ std::vector<uint64_t> ArgSizes;
 bool GetBitSlicedData(CallInst *call, LLVMContext &Context){
 	IRBuilder<> builder(call);
 		
-	Instruction *inputSize = cast<Instruction>(call->getArgOperand(0));
-	for(; !isa<AllocaInst>(inputSize); inputSize = cast<Instruction>(inputSize->getOperand(0)));
-	AllocaInst *blocksAlloca = cast<AllocaInst>(inputSize);
+	Instruction *inputInst = cast<Instruction>(call->getArgOperand(0));
+	for(; !isa<AllocaInst>(inputInst); inputInst = cast<Instruction>(inputInst->getOperand(0)));
+	AllocaInst *blocksAlloca = cast<AllocaInst>(inputInst);
 	if(!isa<ArrayType>(blocksAlloca->getAllocatedType())){
 		errs() << "ERROR: argument 1 not a static array\n";
 	//	return false;
 	}
-	uint64_t oldSize = cast<ArrayType>(blocksAlloca->getAllocatedType())->getNumElements();
+	uint64_t inputSize = cast<ArrayType>(blocksAlloca->getAllocatedType())->getNumElements();
 		
 	Instruction *outputSize = cast<Instruction>(call->getArgOperand(1));
 	for(; !isa<AllocaInst>(outputSize); outputSize = cast<Instruction>(outputSize->getOperand(0)));
@@ -69,8 +69,8 @@ bool GetBitSlicedData(CallInst *call, LLVMContext &Context){
 	}
 	uint64_t newSize = dyn_cast<ArrayType>(slicesAlloca->getAllocatedType())->getNumElements();	
 	
-	if(newSize < (oldSize/32)*8){
-		errs() << "ERROR: insufficient size of second operand.\nIt should be at least: ( " << oldSize << " / sizeof(int) ) * 8\n";
+	if(newSize < (inputSize/32)*8){
+		errs() << "ERROR: insufficient size of second operand.\nIt should be at least: ( " << inputSize << " / sizeof(int) ) * 8\n";
 		return false;
 	}
 
@@ -117,15 +117,15 @@ bool GetUnBitSlicedData(CallInst *call, LLVMContext &Context){
 	IRBuilder<> builder(call);
 	int i, j, k;
 	
-	Instruction *inputSize = cast<Instruction>(call->getArgOperand(0));
-	for(; !isa<AllocaInst>(inputSize); inputSize = cast<Instruction>(inputSize->getOperand(0)));
-	AllocaInst *slicesAlloca = cast<AllocaInst>(inputSize);
+	Instruction *inputInst = cast<Instruction>(call->getArgOperand(0));
+	for(; !isa<AllocaInst>(inputInst); inputInst = cast<Instruction>(inputInst->getOperand(0)));
+	AllocaInst *slicesAlloca = cast<AllocaInst>(inputInst);
 	
 	if(!isa<ArrayType>(slicesAlloca->getAllocatedType())){
 		errs() << "ERROR: argument 1 not a static array\n";
 	//	return false;
 	}
-	uint64_t oldSize = cast<ArrayType>(slicesAlloca->getAllocatedType())->getNumElements();
+	uint64_t inputSize = cast<ArrayType>(slicesAlloca->getAllocatedType())->getNumElements();
 	
 	Instruction *outputSize = cast<Instruction>(call->getArgOperand(1));
 	for(; !isa<AllocaInst>(outputSize); outputSize = cast<Instruction>(outputSize->getOperand(0)));
@@ -137,9 +137,9 @@ bool GetUnBitSlicedData(CallInst *call, LLVMContext &Context){
 	}
 	uint64_t newSize = cast<ArrayType>(outputAlloca->getAllocatedType())->getNumElements();
 	
-	if(newSize < (oldSize/32)*8){
+	if(newSize < (inputSize/32)*8){
 		errs() << "ERROR: insufficient size of second operand.\nIt should be at least: (" 
-			   << oldSize << " / sizeof(int)) * 8\n";
+			   << inputSize << " / sizeof(int)) * 8\n";
 		return false;
 	}
 		
@@ -154,7 +154,7 @@ bool GetUnBitSlicedData(CallInst *call, LLVMContext &Context){
 	
 	Value *bitVal, *tmp;
 	Type *sliceTy = IntegerType::getInt32Ty(Context);			//FIXME: dependant on the target machine
-	int outputLen = oldSize/8;
+	int outputLen = inputSize/8;
 	
 	for(i=0; i<32; i++){			//FIXME: dependant on the target machine
 		for(j=0; j < outputLen; j++){
@@ -185,6 +185,7 @@ bool BitSlice(CallInst *call, LLVMContext &Context){
 	IRBuilder<> builder(call);
 
 	uint64_t blocks = cast<ConstantInt>(call->getArgOperand(1))->getZExtValue();
+	uint64_t blocksLen = cast<ConstantInt>(call->getArgOperand(2))->getZExtValue();
 
 	BlocksNumList.push_back(blocks);
 
@@ -196,9 +197,9 @@ bool BitSlice(CallInst *call, LLVMContext &Context){
 	New->insertInto(call->getFunction(), Succ);
 	Pred->getTerminator()->setSuccessor(0, New);
 */		
-	Instruction *inputSize = cast<Instruction>(call->getArgOperand(0));
-	for(; !isa<AllocaInst>(inputSize); inputSize = cast<Instruction>(inputSize->getOperand(0)));
-	AllocaInst *oldAlloca = cast<AllocaInst>(inputSize);
+	Instruction *inputInst = cast<Instruction>(call->getArgOperand(0));
+	for(; !isa<AllocaInst>(inputInst); inputInst = cast<Instruction>(inputInst->getOperand(0)));
+	AllocaInst *oldAlloca = cast<AllocaInst>(inputInst);
 //	if(oldAlloca->getAllocatedType()->isPointerTy())
 //		isPtr = true;
 	AllocOldNames.push_back(oldAlloca->getName());
@@ -207,8 +208,6 @@ bool BitSlice(CallInst *call, LLVMContext &Context){
 		errs() << "ERROR: argument 1 not a static array\n";
 	//	return false;
 	}
-
-	uint64_t oldSize = cast<ArrayType>(oldAlloca->getAllocatedType())->getNumElements();
 
 	MDNode *MData;
 	if(blocks > 1){
@@ -295,7 +294,7 @@ errs() << __LINE__ << "\n";
 
 	Type *sliceTy = IntegerType::getInt32Ty(Context);
 	ArrayType *arrTy;
-	arrTy = ArrayType::get(sliceTy, (oldSize/blocks)*8);		//FIXME: need to make it type dependant.
+	arrTy = ArrayType::get(sliceTy, blocksLen*8);		//FIXME: need to make it type dependent.
 	
 	AllocaInst *all = builder.CreateAlloca(arrTy, 0, "SLICES");
 	AllocNewInstBuff.push_back(all);
@@ -315,7 +314,7 @@ errs() << __LINE__ << "\n";
 	Value *Byte;
 	Value *bitVal;
 	Value *sliceAddr;
-	int BitSizeOfInput = (oldSize/blocks)*8;
+	int BitSizeOfInput = blocksLen*8;
 
 if(blocks > 1){			//FIXME: ADD THIS WARNING IN THE DOCUMENTATION: if a different size of the program dependent on the number of blocks processed in parallel is not an issue and you want more efficiency you'd better specify that you use just 1 block. If the different size of the program is an issue you should put always 32 as number of blocks (or the maximum value you use in your program). In that case, ALLOCATE FOR 32 BLOCKS AS WELL, AND FILL THE REMAINING SPACE WITH ZEROS!!
 
@@ -340,7 +339,7 @@ if(blocks > 1){			//FIXME: ADD THIS WARNING IN THE DOCUMENTATION: if a different
 	forBodyBuilder.CreateStore(idxZero, idx2Alloca);
 	idx = forBodyBuilder.CreateLoad(idxAlloca, "idxprom");
 	SliceIdxList.at(1) = idx;
-	sliceAddr = forBodyBuilder.CreateGEP(all, ArrayRef <Value *>(IdxList), "sliceAddr");
+	sliceAddr = forBodyBuilder.CreateGEP(all, ArrayRef <Value *>(SliceIdxList), "sliceAddr");
 	BasicBlock *forCond2 = BasicBlock::Create(Context, "for.cond", call->getFunction(), forEnd);
 	forBodyBuilder.CreateBr(forCond2);
 	
@@ -356,7 +355,7 @@ if(blocks > 1){			//FIXME: ADD THIS WARNING IN THE DOCUMENTATION: if a different
 	Value *div = forBody2Builder.CreateSDiv(idx, ConstantInt::get(idxTy, 8), "div"); //coloumn i = 0, 1,... #input-elements
 	idx2 = forBody2Builder.CreateLoad(idx2Alloca, "idxprom");
 	//Value *div2 = forBody2Builder.CreateSDiv(idx2, ConstantInt::get(idxTy, 8), "div");
-	Value *mul = forBody2Builder.CreateNSWMul(idx2, ConstantInt::get(idxTy, BitSizeOfInput/8), "mul"); //row j*sizeof(row)
+	Value *mul = forBody2Builder.CreateNSWMul(idx2, ConstantInt::get(idxTy, blocksLen), "mul"); //row j*sizeof(row)
 	Value *add = forBody2Builder.CreateNSWAdd(div, mul, "add");
 	if(oldAlloca->getAllocatedType()->isPointerTy())
 		IdxList.at(0) = add;
@@ -525,8 +524,9 @@ bool UnBitSlice(CallInst *call, LLVMContext &Context){
 	*/
 	
 	AllocaInst *slicesAlloca = AllocNewInstBuff.at(i);
+
 	uint64_t blocks = BlocksNumList.at(i);
-	
+
 	std::vector<Value *> IdxList;
 	Type *idxTy = IntegerType::getInt64Ty(Context);
 	Value *idxZero = ConstantInt::get(idxTy, 0);
@@ -537,8 +537,10 @@ bool UnBitSlice(CallInst *call, LLVMContext &Context){
 		errs() << "ERROR: argument 1 not a static array\n";
 	//	return false;
 	}
-	uint64_t oldSize = cast<ArrayType>(oldAlloca->getAllocatedType())->getNumElements();
-	int ByteSizeOfOutput = oldSize/blocks;
+	uint64_t ByteSizeOfOutput = cast<ArrayType>(slicesAlloca->getAllocatedType())->getNumElements()/8; 
+																				//FIXME: check this when creating support 
+																				//for other types than uint8_t
+
 	Type *byteTy = IntegerType::getInt8Ty(Context);
 	
 	if(blocks > 1){
