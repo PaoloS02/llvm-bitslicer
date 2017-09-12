@@ -183,9 +183,9 @@ bool GetUnBitSlicedData(CallInst *call, LLVMContext &Context){
 
 bool BitSlice(CallInst *call, LLVMContext &Context){
 	IRBuilder<> builder(call);
-errs() << __LINE__ << "\n";
+
 	uint64_t blocks = cast<ConstantInt>(call->getArgOperand(1))->getZExtValue();
-errs() << __LINE__ << "\n";
+
 	BlocksNumList.push_back(blocks);
 
 //	bool isPtr = false;
@@ -202,19 +202,14 @@ errs() << __LINE__ << "\n";
 //	if(oldAlloca->getAllocatedType()->isPointerTy())
 //		isPtr = true;
 	AllocOldNames.push_back(oldAlloca->getName());
-errs() << __LINE__ << "\n";	
+
 	if(!isa<ArrayType>(oldAlloca->getAllocatedType())){
 		errs() << "ERROR: argument 1 not a static array\n";
 	//	return false;
 	}
-errs() << __LINE__ << "\n";
-	
-//	if(isa<ArrayType>(oldAlloca->getAllocatedType())) //prendi il numero del parametro e cerca il parametro con la stessa posizione nell'invocazione di questa funzione nella funzione chiamante.
-	//LLVMGetParams(call->getFunction(), params);
-	int argIdx = 0;
-	for(auto arg : call->getFunction()->args());
+
 	uint64_t oldSize = cast<ArrayType>(oldAlloca->getAllocatedType())->getNumElements();
-errs() << __LINE__ << "\n";	
+
 	MDNode *MData;
 	if(blocks > 1){
 		MData = MDNode::get(Context, 
@@ -297,7 +292,7 @@ errs() << __LINE__ << "\n";
 	*/
 	
 	//oldAlloca->replaceAllUsesWith(oldAlloca);
-errs() << __LINE__ << "\n";	
+
 	Type *sliceTy = IntegerType::getInt32Ty(Context);
 	ArrayType *arrTy;
 	arrTy = ArrayType::get(sliceTy, (oldSize/blocks)*8);		//FIXME: need to make it type dependant.
@@ -306,7 +301,7 @@ errs() << __LINE__ << "\n";
 	AllocNewInstBuff.push_back(all);
 	
 	//int i, j;
-errs() << __LINE__ << "\n";	
+	
 	std::vector<Value *> IdxList;
 	std::vector<Value *> SliceIdxList;
 	Type *idxTy = IntegerType::getInt64Ty(Context);
@@ -321,7 +316,7 @@ errs() << __LINE__ << "\n";
 	Value *bitVal;
 	Value *sliceAddr;
 	int BitSizeOfInput = (oldSize/blocks)*8;
-errs() << __LINE__ << "\n";
+
 if(blocks > 1){			//FIXME: ADD THIS WARNING IN THE DOCUMENTATION: if a different size of the program dependent on the number of blocks processed in parallel is not an issue and you want more efficiency you'd better specify that you use just 1 block. If the different size of the program is an issue you should put always 32 as number of blocks (or the maximum value you use in your program). In that case, ALLOCATE FOR 32 BLOCKS AS WELL, AND FILL THE REMAINING SPACE WITH ZEROS!!
 
 	AllocaInst *idxAlloca = builder.CreateAlloca(idxTy, 0, "idx_i");
@@ -399,9 +394,9 @@ if(blocks > 1){			//FIXME: ADD THIS WARNING IN THE DOCUMENTATION: if a different
 	inc = forIncBuilder.CreateNSWAdd(inc, ConstantInt::get(idxTy, 1), "inc");
 	forIncBuilder.CreateStore(inc, idxAlloca);
 	forIncBuilder.CreateBr(forCond);
-errs() << __LINE__ << "\n";
+
 }else if(blocks == 1){
-errs() << __LINE__ << "\n";	
+
 	AllocaInst *idxAlloca = builder.CreateAlloca(idxTy, 0, "idx_i");
 	AllocaInst *idx2Alloca = builder.CreateAlloca(idxTy, 0, "idx_j");
 	builder.CreateStore(idxZero, idxAlloca);
@@ -416,7 +411,7 @@ errs() << __LINE__ << "\n";
 	Value *cmp = forCondBuilder.CreateICmpSLT(idx, ConstantInt::get(idxTy, BitSizeOfInput/8), "cmp");
 	BasicBlock *forBody = BasicBlock::Create(Context, "for.body", call->getFunction(), forEnd);
 	forCondBuilder.CreateCondBr(cmp, forBody, forEnd);
-errs() << __LINE__ << "\n";	
+
 	IRBuilder<> forBodyBuilder(forBody);
 	idx = forBodyBuilder.CreateLoad(idxAlloca, "idxprom");
 	//Value *div = forBodyBuilder.CreateSDiv(idx, ConstantInt::get(idxTy, 8), "div"); //8, #bits per element
@@ -430,14 +425,14 @@ errs() << __LINE__ << "\n";
 	forBodyBuilder.CreateStore(idxZero, idx2Alloca);
 	BasicBlock *forCond2 = BasicBlock::Create(Context, "for.cond", call->getFunction(), forEnd);
 	forBodyBuilder.CreateBr(forCond2);
-errs() << __LINE__ << "\n";	
+
 	IRBuilder<> forCond2Builder(forCond2);
 	Value *idx2 = forCond2Builder.CreateLoad(idx2Alloca);
 	Value *cmp2 = forCond2Builder.CreateICmpSLT(idx2, ConstantInt::get(idxTy, 8), "cmp");	//8, #bits per element
 	BasicBlock *forBody2 = BasicBlock::Create(Context, "for.body", call->getFunction(), forEnd);
 	BasicBlock *forEnd2 = BasicBlock::Create(Context, "for.end", call->getFunction(), forEnd);
 	forCond2Builder.CreateCondBr(cmp2, forBody2, forEnd2);
-errs() << __LINE__ << "\n";	
+
 	IRBuilder<> forBody2Builder(forBody2);
 	//Value *bitShift = forBody2Builder.CreateSRem(idx, ConstantInt::get(idxTy, 8));
 	idx2 = forBody2Builder.CreateLoad(idx2Alloca);
@@ -452,7 +447,7 @@ errs() << __LINE__ << "\n";
 	forBody2Builder.CreateStore(bitVal, sliceAddr);
 	BasicBlock *forInc2 = BasicBlock::Create(Context, "for.inc", call->getFunction(), forEnd2);
 	forBody2Builder.CreateBr(forInc2);
-errs() << __LINE__ << "\n";	
+
 	IRBuilder<> forInc2Builder(forInc2);
 	Value *inc2 = forInc2Builder.CreateLoad(idx2Alloca);
 	inc2 = forInc2Builder.CreateNSWAdd(inc2, ConstantInt::get(idxTy, 1), "inc");
@@ -470,7 +465,6 @@ errs() << __LINE__ << "\n";
 	inc = forIncBuilder.CreateNSWAdd(inc, ConstantInt::get(idxTy, 1), "inc");
 	forIncBuilder.CreateStore(inc, idxAlloca);
 	forIncBuilder.CreateBr(forCond);
-errs() << __LINE__ << "\n";
 }
 
 /*	
@@ -1544,12 +1538,13 @@ namespace{
 														MDString::get(I.getContext(), "bitsliced"));
 							Inst->setMetadata("to_be_bit-sliced", mdata);
 						}
-						
+					/*	
 						if(auto *gep = dyn_cast<GetElementPtrInst>(&I)){
 						}
 						
 						if(auto *st = dyn_cast<StoreInst>(&I)){
 						}
+					*/
 					}
 					
 					if(I.getMetadata("bitsliced")){
