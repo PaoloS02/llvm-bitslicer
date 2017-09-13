@@ -44,8 +44,8 @@ std::vector<StringRef> BitSlicedAllocNames;
 std::vector<AllocaInst *> BitSlicedAllocInstBuff;
 std::vector<uint64_t> BlocksNumList;
 std::vector<uint64_t> ArgSizes;
-
-
+std::vector<Value *> GEPInstBuff;
+std::vector<StringRef> GEPNames;
 
 bool GetBitSlicedData(CallInst *call, LLVMContext &Context){
 	IRBuilder<> builder(call);
@@ -541,14 +541,14 @@ bool UnBitSlice(CallInst *call, LLVMContext &Context){
 	uint64_t blocks = BlocksNumList.at(i);
 
 	std::vector<Value *> IdxList;
-	std::vector<Value *> SlicesIdxList;
+	std::vector<Value *> SliceIdxList;
 	Type *idxTy = IntegerType::getInt64Ty(Context);
 	Value *idxZero = ConstantInt::get(idxTy, 0);
 	IdxList.push_back(idxZero);
 	if(!oldAlloca->getAllocatedType()->isPointerTy())	
 		IdxList.push_back(idxZero);
-	SlicesIdxList.push_back(idxZero);
-	SlicesIdxList.push_back(idxZero);
+	SliceIdxList.push_back(idxZero);
+	SliceIdxList.push_back(idxZero);
 /*	
 	if(!isa<ArrayType>(oldAlloca->getAllocatedType())){
 		errs() << "ERROR: argument 1 not a static array\n";
@@ -597,8 +597,8 @@ bool UnBitSlice(CallInst *call, LLVMContext &Context){
 		Value *idxMul = forBody2Builder.CreateNSWMul(idxMod, ConstantInt::get(idxTy, 8), "idx_mul");
 		idx2 = forBody2Builder.CreateLoad(idx2Alloca);
 		Value *idxAdd = forBody2Builder.CreateNSWAdd(idxMul, idx2);
-		SlicesIdxList.at(1) = idxAdd;
-		Value *sliceAddr = forBody2Builder.CreateGEP(slicesAlloca, ArrayRef <Value *>(SlicesIdxList));
+		SliceIdxList.at(1) = idxAdd;
+		Value *sliceAddr = forBody2Builder.CreateGEP(slicesAlloca, ArrayRef <Value *>(SliceIdxList));
 		Value *slice = forBody2Builder.CreateLoad(sliceAddr);
 		Value *sliceShift = forBody2Builder.CreateSDiv(idx, ConstantInt::get(idxTy, ByteSizeOfOutput));
 		Value *byte = forBody2Builder.CreateZExt(slice, idxTy);
@@ -679,8 +679,8 @@ bool UnBitSlice(CallInst *call, LLVMContext &Context){
 		idx2 = forBody2Builder.CreateLoad(idx2Alloca);
 		Value *idxMul = forBody2Builder.CreateNSWMul(idx, ConstantInt::get(idxTy, 8));
 		Value *idxAdd = forBody2Builder.CreateNSWAdd(idxMul, idx2);
-		SlicesIdxList.at(1) = idxAdd;
-		Value *slice = forBody2Builder.CreateGEP(slicesAlloca, ArrayRef <Value *>(SlicesIdxList));
+		SliceIdxList.at(1) = idxAdd;
+		Value *slice = forBody2Builder.CreateGEP(slicesAlloca, ArrayRef <Value *>(SliceIdxList));
 		slice = forBody2Builder.CreateLoad(slice);
 		slice = forBody2Builder.CreateZExt(slice, idxTy);
 		slice = forBody2Builder.CreateAnd(slice, ConstantInt::get(idxTy, 1));
@@ -1571,13 +1571,6 @@ namespace{
 														MDString::get(I.getContext(), "bitsliced"));
 							Inst->setMetadata("to_be_bit-sliced", mdata);
 						}
-					/*	
-						if(auto *gep = dyn_cast<GetElementPtrInst>(&I)){
-						}
-						
-						if(auto *st = dyn_cast<StoreInst>(&I)){
-						}
-					*/
 					}
 					
 					if(I.getMetadata("bitsliced")){
@@ -1820,7 +1813,108 @@ namespace{
 			for(CallInst *c : UnBitSliceCalls){
 				UnBitSlice(c, c->getModule()->getContext());
 			}
-		
+			
+			for(Function& F : M){
+				for(BasicBlock& B : F){
+					for(Instruction& I : B){
+						if(I.getMetadata("to_be_bit-sliced")){
+							IRBuilder<> builder(&I);
+							for(auto& U : I.uses()){
+								User *user = U.getUser();
+								//user->dump();
+								auto *Inst = dyn_cast<Instruction>(user);
+								MDNode *mdata = MDNode::get(I.getContext(), 
+															MDString::get(I.getContext(), "bitsliced"));
+								Inst->setMetadata("to_be_bit-sliced", mdata);
+							}
+						
+							if(auto *gep = dyn_cast<GetElementPtrInst>(&I)){
+								//manage single-long-array and multi-array cases
+								Value *Idx;
+								Value *newGEP;
+								Type *IdxTy = IntegerType::getInt64Ty(I.getModule()->getContext());
+								Value *IdxZero = ConstantInt::get(IdxTy, 0);
+								std::vector<Value *> IdxList;
+								IdxList.push_back(IdxZero);
+								std::vector<Value *> SliceIdxList;
+								SliceIdxList.push_back(IdxZero);
+								SliceIdxList.push_back(IdxZero);
+								int i, nameIdx;
+								//-->single long array
+								Instruction *inputInst = cast<Instruction>(gep->getPointerOperand());
+								for(; !isa<AllocaInst>(inputInst); inputInst = cast<Instruction>(inputInst->getOperand(0)));
+								AllocaInst *gepAlloca = cast<AllocaInst>(inputInst);
+								
+								nameIdx = 0;
+								for(auto name : AllocOldNames){
+									if(gepAlloca->getName().equals(name)){
+										break;
+									}
+									nameIdx++;
+								}
+								
+								if(gepAlloca->getAllocatedType()->isPointerTy()){
+									Idx = gep->getOperand(1);
+								}else{
+									Idx = gep->getOperand(2);
+									IdxList.push_back(IdxZero);
+								}
+								Idx = builder.CreateShl(Idx, ConstantInt::get(Idx->getType(), 3)); //I multiply the pointer by 8
+																			//in order to reach the correct octet of slices
+								//FIXME: we are now assuming that the algorithm that we are bit-slicing is designed
+								//to process a single array per time
+								if(cast<IntegerType>(Idx->getType())->getBitWidth() < 64)
+									Idx = builder.CreateZExt(Idx, IdxTy);
+								else if(cast<IntegerType>(Idx->getType())->getBitWidth() > 64)
+									Idx = builder.CreateTrunc(Idx, IdxTy);
+								
+								for(i = 0; i < 8; i++){
+									SliceIdxList.at(1) = Idx;
+									if(gepAlloca->getAllocatedType()->isPointerTy()){
+										newGEP = builder.CreateLoad(gepAlloca);
+										if(gep->isInBounds())
+											newGEP = builder.CreateInBoundsGEP(newGEP, ArrayRef <Value *>(SliceIdxList));
+										else
+											newGEP = builder.CreateGEP(newGEP, ArrayRef <Value *>(SliceIdxList));
+									}else{
+										if(gep->isInBounds())
+											newGEP = builder.CreateInBoundsGEP(gepAlloca, ArrayRef <Value *>(SliceIdxList));
+										else
+											newGEP = builder.CreateGEP(gepAlloca, ArrayRef <Value *>(SliceIdxList));
+									}
+									GEPInstBuff.push_back(newGEP);
+									GEPNames.push_back(newGEP->getName());
+									Idx = builder.CreateNSWAdd(Idx, ConstantInt::get(IdxTy, 1));
+									
+									if(i == 0){
+										gep->replaceAllUsesWith(newGEP);
+										/*for(auto& U : I.uses()){
+											User *user = U.getUser();
+											//user->dump();
+											auto *Inst = dyn_cast<Instruction>(user);
+											//if(Inst->getMetadata("to_be_bit-sliced"))
+											MDNode *mdata = MDNode::get(I.getContext(), 
+																		MDString::get(I.getContext(), "bitsliced"));
+											Inst->setMetadata("to_be_bit-sliced", mdata);
+										}
+										*/
+									}
+								}
+								
+								//address the proper slice/slices
+						
+								//further optimizations by looking at the used index and it's increment and limit? 
+								//(we should consider also optional exits from the loop)
+								eraseList.push_back(gep);
+							}
+					/*	
+						if(auto *st = dyn_cast<StoreInst>(&I)){
+						}
+					*/
+						}
+					}
+				}
+			}
 		/*	
 			for(auto &SSP: startSplitPoints){
 				StringRef StartName = cast<ConstantDataSequential>(cast<User>(cast<User>(SSP->getArgOperand(0))
