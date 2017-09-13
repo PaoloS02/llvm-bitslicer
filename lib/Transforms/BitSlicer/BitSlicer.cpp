@@ -189,7 +189,7 @@ bool BitSlice(CallInst *call, LLVMContext &Context){
 
 	BlocksNumList.push_back(blocks);
 
-//	bool isPtr = false;
+	bool mark = false;
 /*	
 	BasicBlock *Pred = call->getParent();
 	BasicBlock *Succ = call->getParent()->splitBasicBlock(call, "for(alloca).end");
@@ -257,7 +257,13 @@ Inst->dump();
 		MDNode *mdata = MDNode::get(oldAlloca->getContext(), 
 										MDString::get(oldAlloca->getContext(), "to_be_bit-sliced"));
 		auto *Inst = cast<Instruction>(user);
-		Inst->setMetadata("to_be_bit-sliced", mdata);
+		
+		if(mark)	
+			Inst->setMetadata("to_be_bit-sliced", mdata);
+		
+		if(Inst->getName().equals(call->getName())){
+			mark = true;
+		}
 	}
 
 	/*
@@ -1871,23 +1877,27 @@ namespace{
 								for(i = 0; i < 8; i++){
 									SliceIdxList.at(1) = Idx;
 									if(gepAlloca->getAllocatedType()->isPointerTy()){
-										newGEP = builder.CreateLoad(gepAlloca);
+										//newGEP = builder.CreateLoad(gepAlloca);
 										if(gep->isInBounds())
-											newGEP = builder.CreateInBoundsGEP(newGEP, ArrayRef <Value *>(SliceIdxList));
+											newGEP = builder.CreateInBoundsGEP(AllocNewInstBuff.at(nameIdx), 
+																			   ArrayRef <Value *>(SliceIdxList));
 										else
-											newGEP = builder.CreateGEP(newGEP, ArrayRef <Value *>(SliceIdxList));
+											newGEP = builder.CreateGEP(AllocNewInstBuff.at(nameIdx), 
+																	   ArrayRef <Value *>(SliceIdxList));
 									}else{
 										if(gep->isInBounds())
-											newGEP = builder.CreateInBoundsGEP(gepAlloca, ArrayRef <Value *>(SliceIdxList));
+											newGEP = builder.CreateInBoundsGEP(AllocNewInstBuff.at(nameIdx), 
+																			   ArrayRef <Value *>(SliceIdxList));
 										else
-											newGEP = builder.CreateGEP(gepAlloca, ArrayRef <Value *>(SliceIdxList));
+											newGEP = builder.CreateGEP(AllocNewInstBuff.at(nameIdx), 
+																	   ArrayRef <Value *>(SliceIdxList));
 									}
 									GEPInstBuff.push_back(newGEP);
 									GEPNames.push_back(newGEP->getName());
 									Idx = builder.CreateNSWAdd(Idx, ConstantInt::get(IdxTy, 1));
 									
-									if(i == 0){
-										gep->replaceAllUsesWith(newGEP);
+									//if(i == 0){
+										//gep->replaceAllUsesWith(newGEP);
 										/*for(auto& U : I.uses()){
 											User *user = U.getUser();
 											//user->dump();
@@ -1898,14 +1908,14 @@ namespace{
 											Inst->setMetadata("to_be_bit-sliced", mdata);
 										}
 										*/
-									}
+									//}
 								}
 								
 								//address the proper slice/slices
 						
 								//further optimizations by looking at the used index and it's increment and limit? 
 								//(we should consider also optional exits from the loop)
-								eraseList.push_back(gep);
+								//eraseList.push_back(gep);
 							}
 					/*	
 						if(auto *st = dyn_cast<StoreInst>(&I)){
