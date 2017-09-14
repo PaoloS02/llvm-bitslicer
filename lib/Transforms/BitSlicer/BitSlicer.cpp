@@ -34,7 +34,7 @@ std::vector<BasicBlock *> OrthBBEraseList;
 std::vector<CallInst *> emitPoints;
 std::vector<CallInst *> startSplitPoints;
 std::vector<CallInst *> endSplitPoints;
-std::vector<CallInst *> BitSliceAlloc;
+std::vector<CallInst *> BitSliceCalls;
 std::vector<CallInst *> UnBitSliceCalls;
 std::vector<StringRef> Descriptions;
 std::vector<StringRef> AllocOldNames;
@@ -45,7 +45,10 @@ std::vector<AllocaInst *> BitSlicedAllocInstBuff;
 std::vector<uint64_t> BlocksNumList;
 std::vector<uint64_t> ArgSizes;
 std::vector<Value *> GEPInstBuff;
-std::vector<StringRef> GEPNames;
+std::vector<StringRef> GEPOldNames;
+std::vector<Value *> LoadInstBuff;
+std::vector<LoadInst *> LoadOldInstBuff;
+
 
 bool GetBitSlicedData(CallInst *call, LLVMContext &Context){
 	IRBuilder<> builder(call);
@@ -183,7 +186,7 @@ bool GetUnBitSlicedData(CallInst *call, LLVMContext &Context){
 
 bool BitSlice(CallInst *call, LLVMContext &Context){
 	IRBuilder<> builder(call);
-
+	
 	uint64_t blocks = cast<ConstantInt>(call->getArgOperand(1))->getZExtValue();
 	uint64_t blocksLen = cast<ConstantInt>(call->getArgOperand(2))->getZExtValue();
 
@@ -252,18 +255,33 @@ Inst->dump();
 		}
 	}
 */
+	mark = false;
+	for(BasicBlock &B : *call->getFunction()){
+		for(Instruction &I : B){
+			MDNode *mdata = MDNode::get(oldAlloca->getContext(), 
+										MDString::get(oldAlloca->getContext(), "after-slice"));
+			
+			
+			if(mark)
+				I.setMetadata("after-slice", mdata);
+			
+			if(I.getMetadata("bit-slice-call")){
+				mark = true;
+			}
+		}
+	}
+	
+	mark = false;
+	
 	for(auto& U : oldAlloca->uses()){
 		User *user = U.getUser();
 		MDNode *mdata = MDNode::get(oldAlloca->getContext(), 
 										MDString::get(oldAlloca->getContext(), "to_be_bit-sliced"));
 		auto *Inst = cast<Instruction>(user);
 		
-		if(mark)	
+		if(Inst->getMetadata("after-slice"))
 			Inst->setMetadata("to_be_bit-sliced", mdata);
 		
-		if(Inst->getName().equals(call->getName())){
-			mark = true;
-		}
 	}
 
 	/*
@@ -1478,7 +1496,7 @@ namespace{
 		
 		std::vector<StringRef> AllocNames;
 		std::vector<StringRef> LoadNames;
-		std::vector<StringRef> GEPNames;
+		std::vector<StringRef> GEPOldNames;
 */
 			
 		bool runOnModule(Module &M) override {
@@ -1491,7 +1509,6 @@ namespace{
 				for(Instruction& I : B){
 					//if(OrthErase)
 					//	OrthEraseList.push_back(&I);
-					
 					IRBuilder<> builder(&I);
 					if(auto *call = dyn_cast<CallInst>(&I)){
 						Function *Fn = call->getCalledFunction();
@@ -1511,8 +1528,10 @@ namespace{
 							done = 1;
 						}else if(Fn && Fn->getIntrinsicID() == Intrinsic::bitslice_i32){
 					//		errs() << "args: \n" << call->getNumArgOperands() << "\n";
-							BitSliceAlloc.push_back(call);
-							
+							MDNode *mdata = MDNode::get(call->getContext(), 
+										MDString::get(call->getContext(), "bit-slice-call"));
+							call->setMetadata("bit-slice-call", mdata);
+							BitSliceCalls.push_back(call);
 							/*if(!BitSlice(call, I.getModule()->getContext())){
 								errs() << "bit-slicing failed\n";
 							}*/
@@ -1812,7 +1831,7 @@ namespace{
 			
 			}//F : M
 		
-			for(CallInst *c : BitSliceAlloc){
+			for(CallInst *c : BitSliceCalls){
 				BitSlice(c, c->getModule()->getContext());
 			}
 			
@@ -1833,7 +1852,9 @@ namespace{
 															MDString::get(I.getContext(), "bitsliced"));
 								Inst->setMetadata("to_be_bit-sliced", mdata);
 							}
-						
+							
+		/*---------------------------------------------GEP----------------------------------------------*/
+		
 							if(auto *gep = dyn_cast<GetElementPtrInst>(&I)){
 								//manage single-long-array and multi-array cases
 								Value *Idx;
@@ -1865,6 +1886,9 @@ namespace{
 									Idx = gep->getOperand(2);
 									IdxList.push_back(IdxZero);
 								}
+								
+								GEPOldNames.push_back(gep->getName());
+								
 								Idx = builder.CreateShl(Idx, ConstantInt::get(Idx->getType(), 3)); //I multiply the pointer by 8
 																			//in order to reach the correct octet of slices
 								//FIXME: we are now assuming that the algorithm that we are bit-slicing is designed
@@ -1893,10 +1917,11 @@ namespace{
 																	   ArrayRef <Value *>(SliceIdxList));
 									}
 									GEPInstBuff.push_back(newGEP);
-									GEPNames.push_back(newGEP->getName());
+									
 									Idx = builder.CreateNSWAdd(Idx, ConstantInt::get(IdxTy, 1));
 									
 									//if(i == 0){
+										
 										//gep->replaceAllUsesWith(newGEP);
 										/*for(auto& U : I.uses()){
 											User *user = U.getUser();
@@ -1917,7 +1942,117 @@ namespace{
 								//(we should consider also optional exits from the loop)
 								//eraseList.push_back(gep);
 							}
-					/*	
+
+		/*---------------------------------------------UNARY----------------------------------------------*/
+
+
+						if(auto *un = dyn_cast<UnaryInstruction>(&I)){
+		/*-----LOAD-----*/
+							if(auto *ld = dyn_cast<LoadInst>(un->getOperand(0))){
+								
+								LoadOldInstBuff.push_back(ld);
+		
+						//		errs() << "unique? " << ld->getValueName()->first() << "\n";
+								
+								if(auto *ldAlloca = dyn_cast<AllocaInst>(ld->getPointerOperand())){
+									if(!ldAlloca->getAllocatedType()->isPointerTy()){ 			//otherwise it's a pointer 
+																								//and we mustn't touch it
+										int nameIdx;
+										int i;
+										Type *IdxTy = IntegerType::getInt64Ty(I.getModule()->getContext());
+										Value *IdxZero = ConstantInt::get(IdxTy, 0);
+										std::vector<Value *> SliceIdxList;
+										SliceIdxList.push_back(IdxZero);
+										SliceIdxList.push_back(IdxZero);
+										
+										for(auto name : AllocOldNames){
+											if(un->getOperand(0)->getName().equals(name)){
+												break;
+											}
+											nameIdx++;
+										}
+										
+										Value *newLoad = builder.CreateLoad(AllocNewInstBuff.at(nameIdx));
+										LoadInstBuff.push_back(newLoad);
+										Value *tmpGEP, *Idx;
+										Idx = IdxZero;
+										
+										for(i=0; i<7; i++){
+											SliceIdxList.at(1) = Idx;
+											tmpGEP = builder.CreateInBoundsGEP(AllocNewInstBuff.at(nameIdx),
+																			  ArrayRef <Value *>(SliceIdxList));
+											newLoad = builder.CreateLoad(tmpGEP);
+											LoadInstBuff.push_back(newLoad);
+											Idx = builder.CreateNSWAdd(Idx, ConstantInt::get(IdxTy, 1));
+										}
+									}
+									
+								}
+								
+								if(auto *ldGEP = dyn_cast<GetElementPtrInst>(ld->getPointerOperand())){
+									int nameIdx = 0;
+									for(auto name : GEPOldNames){
+										if(ldGEP->getName().equals(name)){
+											break;
+										}
+										nameIdx++;
+									}
+									int i;
+									Value *newLoad;
+									Type *IdxTy = IntegerType::getInt64Ty(I.getModule()->getContext());
+									Value *IdxZero = ConstantInt::get(IdxTy, 0);
+									std::vector<Value *> SliceIdxList;
+									SliceIdxList.push_back(IdxZero);
+									SliceIdxList.push_back(IdxZero);
+									
+									for(i=0; i<8; i++){
+										newLoad = builder.CreateLoad(GEPInstBuff.at(nameIdx*8+i)); //FIXME: depends on the type
+										LoadInstBuff.push_back(newLoad);
+									}
+						
+								}
+							}
+							
+				//			if(auto *ci = dyn_cast<CastInst>(un)){};
+							
+							
+				/*			
+							int opType = 0;
+							int nameIdxs[3] = {0,0,0};
+							
+							for(auto name : AllocOldNames){
+								if(un->getOperand(0)->getName().equals(name)){
+									opType = 1;
+									break;
+								}
+								nameIdxs[0]++;
+							}
+							
+							for(auto name : GEPOldNames){
+								if(un->getOperand(0)->getName().equals(name)){
+									opType = 2;
+									break;
+								}
+								nameIdxs[1]++;
+							}
+							
+					*/		
+							
+						}
+						
+		/*---------------------------------------------BINARY-OPERATOR----------------------------------------------*/
+	/*	
+						if(auto *bin = dyn_cast<BinaryOperator>(&I)){
+							
+							for(auto *op1 : LoadOldInstBuff){
+								if(op1 == bin->getOperand(0)){
+									bin->getOperand(0)->dump();
+									op1->dump();
+								}
+							}
+						}
+						
+		*/			/*	
 						if(auto *st = dyn_cast<StoreInst>(&I)){
 						}
 					*/
