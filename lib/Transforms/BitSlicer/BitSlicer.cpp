@@ -48,6 +48,10 @@ std::vector<Value *> GEPInstBuff;
 std::vector<StringRef> GEPOldNames;
 std::vector<Value *> LoadInstBuff;
 std::vector<LoadInst *> LoadOldInstBuff;
+std::vector<Value *> CastInstBuff;
+std::vector<CastInst *> CastOldInstBuff;
+std::vector<Value *> BinaryOpInstBuff;
+std::vector<BinaryOperator *> BinaryOpOldInstBuff;
 
 
 bool GetBitSlicedData(CallInst *call, LLVMContext &Context){
@@ -2013,9 +2017,45 @@ namespace{
 								}
 							}
 							
-				//			if(auto *ci = dyn_cast<CastInst>(un)){};
+							if(auto *ci = dyn_cast<CastInst>(un)){
+								int i, ldIdx = 0, lastSlice, resize = 0;
+								Type *SliceTy = IntegerType::getInt32Ty(I.getModule()->getContext());
+								bool intOp = ci->getDestTy()->isIntegerTy() & ci->getSrcTy()->isIntegerTy();
+								if(intOp)
+									resize = cast<IntegerType>(ci->getDestTy())->getBitWidth() - 
+											 cast<IntegerType>(ci->getSrcTy())->getBitWidth();
+								CastOldInstBuff.push_back(ci);
+								if(isa<LoadInst>(ci->getOperand(0))){
+									for(auto *ciLoad : LoadOldInstBuff){
+										if(ciLoad == ci->getOperand(0)){
+								//			ci->getOperand(0)->dump();
+								//			ciLoad->dump();
+											break;
+										}
+										ldIdx++;
+									}
+									
+									for(i=0; i<8; i++){
+										CastInstBuff.push_back(LoadInstBuff.at(ldIdx*8+i));
+									}
+									lastSlice = CastInstBuff.size() - 1;
+								}
+						/*----------------extension----------------*/		
+								if(resize > 0){
+									for(i=0; i < resize; i++){
+										Value *newLoad;
+										if(isa<SExtInst>(ci)){		//signed: we replicate the highest slice, that contains the
+											newLoad = LoadInstBuff.at(lastSlice);	//highest bit of each element in the
+										}											//correspondent position of each block
+										else if(isa<ZExtInst>(ci)){
+											newLoad = ConstantInt::get(SliceTy, 0);
+										}
+										CastInstBuff.push_back(newLoad);
+									}
+								}
+							}
 							
-							
+						/*----------------compression?----------------*/	
 				/*			
 							int opType = 0;
 							int nameIdxs[3] = {0,0,0};
@@ -2041,25 +2081,200 @@ namespace{
 						}
 						
 		/*---------------------------------------------BINARY-OPERATOR----------------------------------------------*/
-	/*	
+						
 						if(auto *bin = dyn_cast<BinaryOperator>(&I)){
 							
-							for(auto *op1 : LoadOldInstBuff){
-								if(op1 == bin->getOperand(0)){
-									bin->getOperand(0)->dump();
-									op1->dump();
+							BinaryOpOldInstBuff.push_back(bin);
+							
+							int op1Idx = 0, op2Idx = 0;
+							bool opFound = false;
+							bool loadOp1 = false, loadOp2 = false;
+							bool castOp1 = false, castOp2 = false;
+							bool BitSlicedOp1 = false, BitSlicedOp2 = false;
+							int numSlices = cast<IntegerType>(bin->getType())->getBitWidth();
+							Value *newBin;
+							
+							if(isa<Instruction>(bin->getOperand(0))){
+								if(cast<Instruction>(bin->getOperand(0))->getMetadata("to_be_bit-sliced"))
+									BitSlicedOp1 = true;
+							}else{
+								BitSlicedOp1 = true;
+							}
+							
+							if(isa<Instruction>(bin->getOperand(1))){
+								if(cast<Instruction>(bin->getOperand(1))->getMetadata("to_be_bit-sliced"))
+									BitSlicedOp1 = true;
+							}else{
+								BitSlicedOp1 = true;
+							}
+							
+							//FIXME: are there binary operators for not integer types (we already 
+							//should exclude floating point numbers, but what about pointers?)
+							
+					//		if(cast<Instruction>(bin->getOperand(0))->getMetadata("to_be_bit-sliced")){
+							if(BitSlicedOp1){
+									for(auto *op1 : LoadOldInstBuff){
+										if(op1 == bin->getOperand(0)){
+											opFound = true;
+											loadOp1 = true;
+											break;
+										}
+										op1Idx += 8;
+									}
+									
+									if(!opFound){
+										op1Idx = 0;
+										for(auto *op1 : CastOldInstBuff){
+											if(op1 == bin->getOperand(0)){
+												opFound = true;
+												castOp1 = true;
+												break;
+											}
+											op1Idx += cast<IntegerType>(op1->getDestTy())->getBitWidth();
+										}
+									}
+								}
+								
+								
+			
+			
+							//if(isa<Instruction>(bin->getOperand(1))){		
+							//	if(cast<Instruction>(bin->getOperand(1))->getMetadata("to_be_bit-sliced")){
+								if(BitSlicedOp2){
+									
+									for(auto *op2 : LoadOldInstBuff){
+										if(op2 == bin->getOperand(1)){
+											opFound = true;
+											loadOp2 = true;
+											break;
+										}
+										op2Idx += 8;
+									}
+									
+									if(!opFound){
+										op2Idx = 0;
+										for(auto *op2 : CastOldInstBuff){
+											if(op2 == bin->getOperand(1)){
+												opFound = true;
+												castOp2 = true;
+												break;
+											}
+											op2Idx += cast<IntegerType>(op2->getDestTy())->getBitWidth();
+										}
+									}
+								}
+						//	}
+						
+						//	if(isa<Instruction>(bin->getOperand(0)) && isa<Instruction>(bin->getOperand(1))){
+							//	if(cast<Instruction>(bin->getOperand(0))->getMetadata("to_be_bit-sliced") &&
+							//	   cast<Instruction>(bin->getOperand(1))->getMetadata("to_be_bit-sliced")	 ){
+								if(BitSlicedOp1 && BitSlicedOp2){
+									Value *op1, *op2;
+									
+									/*TODO: If we are working with uint8_t we'll always have conversion (extension)
+									  of the operands right before the operation itself. The only case in which
+									  there is no conversion with a different type size than 32 bits, so a load
+									  as an operand is if we have the type unit64_t, anyway in that case, that
+									  means, if we supported uint64_t, loads would be managed by creating 64 loads
+									  for the 64 slices of each element, so this version with 'numSlices' already works
+									  for that case too*/
+									  
+									for(int i=0; i<numSlices; i++){
+										if(loadOp1){
+											op1 = LoadInstBuff.at(op1Idx+i);
+										}
+										else if(castOp1){
+											op1 = CastInstBuff.at(op1Idx+i);
+										}
+										if(loadOp2){
+											op2 = LoadInstBuff.at(op2Idx+i);
+										}
+										else if(castOp2){
+											op2 = CastInstBuff.at(op2Idx+i);
+										}
+													
+										newBin = builder.CreateBinOp(bin->getOpcode(), op1, op2);
+										BinaryOpInstBuff.push_back(newBin);
+									}
+								}
+					//		}
+							
+							//if(cast<Instruction>(bin->getOperand(0))->getMetadata("to_be_bit-sliced") &&
+							//   !cast<Instruction>(bin->getOperand(1))->getMetadata("to_be_bit-sliced")	 ){
+							if(BitSlicedOp1 && !BitSlicedOp2){
+								Value *op1, *op2, *tmp = op2;
+								
+								/*TODO: If we are working with uint8_t we'll always have conversion (extension)
+								  of the operands right before the operation itself. The only case in which
+								  there is no conversion with a different type size than 32 bits, so a load
+								  as an operand is if we have the type unit64_t, anyway in that case, that
+								  means, if we supported uint64_t, loads would be managed by creating 64 loads
+								  for the 64 slices of each element, so this version with 'numSlices' already works
+								  for that case too*/
+								  
+								for(int i=0; i<numSlices; i++){
+									if(loadOp1){
+										op1 = LoadInstBuff.at(op1Idx+i);
+									}
+									else if(castOp1){
+									/*	for(int j=0; j<i; j++){
+											cast<IntegerType>(cast<CastInst>(CastInstBuff.at(j))->getDestTy())->getBitWidth();
+											
+										}*/
+										op1 = CastInstBuff.at(op1Idx+i);
+									}		
+						
+									tmp = builder.CreateLShr(bin->getOperand(1), ConstantInt::get(bin->getType(), i));
+									tmp = builder.CreateAnd(tmp, ConstantInt::get(bin->getType(), 1));
+									tmp = builder.CreateMul(tmp, 
+															ConstantInt::get(bin->getType(), 
+																 			 cast<IntegerType>(bin->getType())->getBitMask()));
+					
+									newBin = builder.CreateBinOp(bin->getOpcode(), op1, tmp);
+									BinaryOpInstBuff.push_back(newBin);
 								}
 							}
+							
+						//	if(!cast<Instruction>(bin->getOperand(0))->getMetadata("to_be_bit-sliced") &&
+						//	   cast<Instruction>(bin->getOperand(1))->getMetadata("to_be_bit-sliced")	 ){
+							if(!BitSlicedOp1 && BitSlicedOp2){
+								Value *op1, *op2, *tmp = op1;
+								
+								/*TODO: If we are working with uint8_t we'll always have conversion (extension)
+								  of the operands right before the operation itself. The only case in which
+								  there is no conversion with a different type size than 32 bits, so a load
+								  as an operand is if we have the type unit64_t, anyway in that case, that
+								  means, if we supported uint64_t, loads would be managed by creating 64 loads
+								  for the 64 slices of each element, so this version with 'numSlices' already works
+								  for that case too*/
+								  
+								for(int i=0; i<numSlices; i++){		
+									tmp = builder.CreateLShr(op1, ConstantInt::get(bin->getType(), i));
+									tmp = builder.CreateAnd(tmp, ConstantInt::get(bin->getType(), 1));
+									tmp = builder.CreateSExt(tmp, bin->getType());
+											
+									if(loadOp2){
+										op2 = LoadInstBuff.at(op1Idx+i);
+									}
+									else if(castOp1){
+										op2 = CastInstBuff.at(op1Idx+i);
+									}
+									
+									newBin = builder.CreateBinOp(bin->getOpcode(), tmp, op2);
+									BinaryOpInstBuff.push_back(newBin);
+								}
+							}
+						
 						}
 						
-		*/			/*	
+					/*	
 						if(auto *st = dyn_cast<StoreInst>(&I)){
 						}
 					*/
-						}
-					}
-				}
-			}
+						} //getMetadata
+					} //I : B
+				} //B : F
+			} //F : M
 		/*	
 			for(auto &SSP: startSplitPoints){
 				StringRef StartName = cast<ConstantDataSequential>(cast<User>(cast<User>(SSP->getArgOperand(0))
