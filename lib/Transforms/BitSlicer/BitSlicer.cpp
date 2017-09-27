@@ -28,6 +28,7 @@
 
 using namespace llvm;
 
+
 std::vector<Instruction *> eraseList;
 std::vector<Instruction *> OrthEraseList;
 std::vector<BasicBlock *> OrthBBEraseList;
@@ -45,13 +46,14 @@ std::vector<AllocaInst *> BitSlicedAllocInstBuff;
 std::vector<uint64_t> BlocksNumList;
 std::vector<uint64_t> ArgSizes;
 std::vector<Value *> GEPInstBuff;
-std::vector<StringRef> GEPOldNames;
+std::vector<GetElementPtrInst *> GEPOldInstBuff;
 std::vector<Value *> LoadInstBuff;
 std::vector<LoadInst *> LoadOldInstBuff;
 std::vector<Value *> CastInstBuff;
 std::vector<CastInst *> CastOldInstBuff;
 std::vector<Value *> BinaryOpInstBuff;
 std::vector<BinaryOperator *> BinaryOpOldInstBuff;
+std::vector<BinaryOperator *> ShiftInstList;
 
 
 bool GetBitSlicedData(CallInst *call, LLVMContext &Context){
@@ -1848,6 +1850,7 @@ namespace{
 					for(Instruction& I : B){
 						if(I.getMetadata("to_be_bit-sliced")){
 							IRBuilder<> builder(&I);
+							LLVMContext &Context = I.getModule()->getContext();
 							for(auto& U : I.uses()){
 								User *user = U.getUser();
 								//user->dump();
@@ -1891,7 +1894,7 @@ namespace{
 									IdxList.push_back(IdxZero);
 								}
 								
-								GEPOldNames.push_back(gep->getName());
+								GEPOldInstBuff.push_back(gep);
 								
 								Idx = builder.CreateShl(Idx, ConstantInt::get(Idx->getType(), 3)); //I multiply the pointer by 8
 																			//in order to reach the correct octet of slices
@@ -1989,17 +1992,18 @@ namespace{
 											LoadInstBuff.push_back(newLoad);
 											Idx = builder.CreateNSWAdd(Idx, ConstantInt::get(IdxTy, 1));
 										}
+
 									}
 									
 								}
 								
 								if(auto *ldGEP = dyn_cast<GetElementPtrInst>(ld->getPointerOperand())){
-									int nameIdx = 0;
-									for(auto name : GEPOldNames){
-										if(ldGEP->getName().equals(name)){
+									int GEPIdx = 0;
+									for(auto oldGEP : GEPOldInstBuff){
+										if(ldGEP == oldGEP){
 											break;
 										}
-										nameIdx++;
+										GEPIdx++;
 									}
 									int i;
 									Value *newLoad;
@@ -2010,21 +2014,24 @@ namespace{
 									SliceIdxList.push_back(IdxZero);
 									
 									for(i=0; i<8; i++){
-										newLoad = builder.CreateLoad(GEPInstBuff.at(nameIdx*8+i)); //FIXME: depends on the type
+										newLoad = builder.CreateLoad(GEPInstBuff.at(GEPIdx*8+i)); //FIXME: depends on the type
 										LoadInstBuff.push_back(newLoad);
 									}
-						
+
 								}
 							}
-							
+
+				/*-----CAST-----*/
+
 							if(auto *ci = dyn_cast<CastInst>(un)){
-								int i, ldIdx = 0, lastSlice, resize = 0;
-								Type *SliceTy = IntegerType::getInt32Ty(I.getModule()->getContext());
+								int i, opIdx = 0, lastSlice, resize = 0;
+								Type *sliceTy = IntegerType::getInt32Ty(I.getModule()->getContext());
 								bool intOp = ci->getDestTy()->isIntegerTy() & ci->getSrcTy()->isIntegerTy();
 								if(intOp)
 									resize = cast<IntegerType>(ci->getDestTy())->getBitWidth() - 
 											 cast<IntegerType>(ci->getSrcTy())->getBitWidth();
 								CastOldInstBuff.push_back(ci);
+								
 								if(isa<LoadInst>(ci->getOperand(0))){
 									for(auto *ciLoad : LoadOldInstBuff){
 										if(ciLoad == ci->getOperand(0)){
@@ -2032,14 +2039,37 @@ namespace{
 								//			ciLoad->dump();
 											break;
 										}
-										ldIdx++;
+										opIdx++;
+										//errs() << "ciLoad ptr type: "; ciLoad->getPointerOperandType()->dump();
+										//opIdx += cast<IntegerType>(ciLoad->getPointerOperandType())->getBitWidth();
 									}
 									
 									for(i=0; i<8; i++){
-										CastInstBuff.push_back(LoadInstBuff.at(ldIdx*8+i));
+										CastInstBuff.push_back(LoadInstBuff.at(opIdx*8+i)); //TODO: parametric dimension of the original type
 									}
+
 									lastSlice = CastInstBuff.size() - 1;
 								}
+								
+								if(isa<BinaryOperator>(ci->getOperand(0))){
+									for(auto *ciBin : BinaryOpOldInstBuff){
+										if(ciBin == ci->getOperand(0)){
+								//			ci->getOperand(0)->dump();
+								//			ciLoad->dump();
+											break;
+										}
+										opIdx++;
+										//opIdx += cast<IntegerType>(ciBin->getType())->getBitWidth();
+									}
+
+									//int BinWidth = cast<IntegerType>(ci->getDestTy())->getBitWidth();
+									for(i=0; i<8; i++){
+										CastInstBuff.push_back(BinaryOpInstBuff.at(opIdx*8+i)); //TODO: parametric dimension of the original type
+									}
+
+									lastSlice = CastInstBuff.size() - 1;
+								}
+						
 						/*----------------extension----------------*/		
 								if(resize > 0){
 									for(i=0; i < resize; i++){
@@ -2048,7 +2078,7 @@ namespace{
 											newLoad = LoadInstBuff.at(lastSlice);	//highest bit of each element in the
 										}											//correspondent position of each block
 										else if(isa<ZExtInst>(ci)){
-											newLoad = ConstantInt::get(SliceTy, 0);
+											newLoad = ConstantInt::get(sliceTy, 0);
 										}
 										CastInstBuff.push_back(newLoad);
 									}
@@ -2056,7 +2086,13 @@ namespace{
 							}
 							
 						/*----------------compression?----------------*/	
-				/*			
+				/*				if(resize < 0){
+									int trunc = cast<IntegerType>(ci->getDestTy())->getBitWidth();
+									for(int i=0; i<trunc; i++){
+										
+									}
+								}
+				*//*			
 							int opType = 0;
 							int nameIdxs[3] = {0,0,0};
 							
@@ -2081,10 +2117,12 @@ namespace{
 						}
 						
 		/*---------------------------------------------BINARY-OPERATOR----------------------------------------------*/
-						
+					//if(I.isBitwiseLogicOp())	
 						if(auto *bin = dyn_cast<BinaryOperator>(&I)){
 							
 							BinaryOpOldInstBuff.push_back(bin);
+							
+							Type *sliceTy = IntegerType::getInt32Ty(Context);
 							
 							int op1Idx = 0, op2Idx = 0;
 							bool opFound = false;
@@ -2098,15 +2136,17 @@ namespace{
 								if(cast<Instruction>(bin->getOperand(0))->getMetadata("to_be_bit-sliced"))
 									BitSlicedOp1 = true;
 							}else{
-								BitSlicedOp1 = true;
+								BitSlicedOp1 = false;
 							}
 							
 							if(isa<Instruction>(bin->getOperand(1))){
 								if(cast<Instruction>(bin->getOperand(1))->getMetadata("to_be_bit-sliced"))
-									BitSlicedOp1 = true;
+									BitSlicedOp2 = true;
 							}else{
-								BitSlicedOp1 = true;
+								BitSlicedOp2 = false;
 							}
+							
+							
 							
 							//FIXME: are there binary operators for not integer types (we already 
 							//should exclude floating point numbers, but what about pointers?)
@@ -2192,9 +2232,25 @@ namespace{
 										else if(castOp2){
 											op2 = CastInstBuff.at(op2Idx+i);
 										}
-													
-										newBin = builder.CreateBinOp(bin->getOpcode(), op1, op2);
-										BinaryOpInstBuff.push_back(newBin);
+										
+										switch(bin->getOpcode()){
+											case Instruction::Shl:
+											case Instruction::LShr:
+											case Instruction::AShr:
+												errs() << "error: Unsupported operation with bit-sliced operand (2)\n";
+												return false;
+											break;
+											case Instruction::And:
+											case Instruction::Or:
+											case Instruction::Xor:
+												newBin = builder.CreateBinOp(bin->getOpcode(), op1, op2);
+												BinaryOpInstBuff.push_back(newBin);
+											break;
+											default:
+											break;
+										}		
+									//	newBin = builder.CreateBinOp(bin->getOpcode(), op1, op2);
+									//	BinaryOpInstBuff.push_back(newBin);
 									}
 								}
 					//		}
@@ -2202,8 +2258,8 @@ namespace{
 							//if(cast<Instruction>(bin->getOperand(0))->getMetadata("to_be_bit-sliced") &&
 							//   !cast<Instruction>(bin->getOperand(1))->getMetadata("to_be_bit-sliced")	 ){
 							if(BitSlicedOp1 && !BitSlicedOp2){
-								Value *op1, *op2, *tmp = op2;
-								
+								Value *op1, *op2;
+
 								/*TODO: If we are working with uint8_t we'll always have conversion (extension)
 								  of the operands right before the operation itself. The only case in which
 								  there is no conversion with a different type size than 32 bits, so a load
@@ -2213,8 +2269,10 @@ namespace{
 								  for that case too*/
 								  
 								for(int i=0; i<numSlices; i++){
+								
 									if(loadOp1){
 										op1 = LoadInstBuff.at(op1Idx+i);
+				
 									}
 									else if(castOp1){
 									/*	for(int j=0; j<i; j++){
@@ -2222,23 +2280,118 @@ namespace{
 											
 										}*/
 										op1 = CastInstBuff.at(op1Idx+i);
+								
 									}		
-						
-									tmp = builder.CreateLShr(bin->getOperand(1), ConstantInt::get(bin->getType(), i));
-									tmp = builder.CreateAnd(tmp, ConstantInt::get(bin->getType(), 1));
-									tmp = builder.CreateMul(tmp, 
-															ConstantInt::get(bin->getType(), 
-																 			 cast<IntegerType>(bin->getType())->getBitMask()));
-					
-									newBin = builder.CreateBinOp(bin->getOpcode(), op1, tmp);
-									BinaryOpInstBuff.push_back(newBin);
+									
+									switch(bin->getOpcode()){
+											case Instruction::Shl:
+											case Instruction::LShr:
+											case Instruction::AShr:
+
+												if(i < 8) {
+													op2 = bin->getOperand(1);
+													Value *shift;
+													int GEPIdx = 0;
+													if(bin->getOpcode() == Instruction::Shl){
+														shift = builder.CreateSub(ConstantInt::get(bin->getType(), i), op2, "shift");
+													}else{
+														shift = builder.CreateAdd(ConstantInt::get(bin->getType(), i), op2, "shift");
+
+													}
+													Value *inRangeShift = builder.CreateAnd(shift, ConstantInt::get(bin->getType(), 7), "shift"); 
+																																												//0x00000007 (for i32)
+													
+													Value *outOfRangeShift = builder.CreateAnd(shift, ConstantInt::get(bin->getType(), -8), "shift"); 
+																																												//0xFFFFFFF8 (for i32)
+
+													Value *shiftEnable = builder.CreateICmpNE(outOfRangeShift, ConstantInt::get(bin->getType(), 0), "shift");
+
+													shiftEnable = builder.CreateXor(shiftEnable,
+																													ConstantInt::get(IntegerType::getInt1Ty(Context), true), "shift");
+
+													shiftEnable = builder.CreateZExt(shiftEnable, sliceTy, "shift");
+													Value *shiftGEP;
+													Instruction *opInst = cast<Instruction>(bin->getOperand(0));
+													for(; !isa<GetElementPtrInst>(opInst); opInst = cast<Instruction>(opInst->getOperand(0))){
+														/*if(isa<GetElementPtrInst>(opInst->getOperand(0))){
+															break;
+														}*/
+														//GEPIdx++;
+													}
+													
+													cast<GetElementPtrInst>(opInst);
+													
+													for(auto oldGEP : GEPOldInstBuff){
+														if(opInst == oldGEP){
+															break;
+														}
+														GEPIdx++;
+													}
+													
+													shiftGEP = GEPInstBuff.at(GEPIdx);
+													Value *idx = cast<Instruction>(shiftGEP)->getOperand(2);
+													if(cast<IntegerType>(idx->getType())->getBitWidth() > 
+														 cast<IntegerType>(inRangeShift->getType())->getBitWidth())
+														 	idx = builder.CreateTrunc(idx, inRangeShift->getType(), "shift");
+
+													if(bin->getOpcode() == Instruction::Shl)
+														idx = builder.CreateSub(idx, inRangeShift, "shift");
+													else
+														idx = builder.CreateAdd(idx, inRangeShift, "shift");
+
+													cast<Instruction>(shiftGEP)->setOperand(2, idx);
+													Value *shiftSlice = builder.CreateLoad(shiftGEP, "shift");
+													shiftSlice = builder.CreateMul(shiftSlice, shiftEnable, "shift");
+													
+													if(bin->getOpcode() == Instruction::AShr){
+
+														Value *signExt;
+														if(loadOp1)
+															signExt = LoadInstBuff.at(op1Idx+7); //last slice
+														if(castOp1)
+															signExt = CastInstBuff.at(op1Idx+7);
+														Value *signExtEnable = builder.CreateNot(shiftEnable, "shift");
+														signExt = builder.CreateMul(signExt, signExtEnable, "shift");
+														shiftSlice = builder.CreateOr(shiftSlice, signExt, "shift");
+													}
+
+													BinaryOpInstBuff.push_back(shiftSlice);
+
+												}
+
+											break;
+											
+										/*		
+												ShiftInstList.push_back(bin);
+												
+												if(i<8)
+													BinaryOpInstBuff.push_back(op1);
+										*/
+											case Instruction::And:
+											case Instruction::Or:
+											case Instruction::Xor:
+
+												op2 = builder.CreateLShr(bin->getOperand(1), ConstantInt::get(bin->getType(), i));
+												op2 = builder.CreateAnd(op2, ConstantInt::get(bin->getType(), 1));
+												op2 = builder.CreateMul(op2, 
+																								ConstantInt::get(bin->getType(), 
+																													 			 cast<IntegerType>(bin->getType())->getBitMask()));
+											//	op2->dump();
+											
+												newBin = builder.CreateBinOp(bin->getOpcode(), op1, op2);
+												BinaryOpInstBuff.push_back(newBin);
+											break;
+											default:
+											break;
+										}
+
 								}
 							}
 							
 						//	if(!cast<Instruction>(bin->getOperand(0))->getMetadata("to_be_bit-sliced") &&
 						//	   cast<Instruction>(bin->getOperand(1))->getMetadata("to_be_bit-sliced")	 ){
 							if(!BitSlicedOp1 && BitSlicedOp2){
-								Value *op1, *op2, *tmp = op1;
+								Value *op1, *op2;
 								
 								/*TODO: If we are working with uint8_t we'll always have conversion (extension)
 								  of the operands right before the operation itself. The only case in which
@@ -2249,19 +2402,36 @@ namespace{
 								  for that case too*/
 								  
 								for(int i=0; i<numSlices; i++){		
-									tmp = builder.CreateLShr(op1, ConstantInt::get(bin->getType(), i));
-									tmp = builder.CreateAnd(tmp, ConstantInt::get(bin->getType(), 1));
-									tmp = builder.CreateSExt(tmp, bin->getType());
-											
+									
 									if(loadOp2){
 										op2 = LoadInstBuff.at(op1Idx+i);
 									}
-									else if(castOp1){
+									else if(castOp2){
 										op2 = CastInstBuff.at(op1Idx+i);
 									}
 									
-									newBin = builder.CreateBinOp(bin->getOpcode(), tmp, op2);
-									BinaryOpInstBuff.push_back(newBin);
+									switch(bin->getOpcode()){
+											case Instruction::Shl:
+											case Instruction::LShr:
+											case Instruction::AShr:
+												errs() << "error: Unsupported operation with bit-sliced operand (2)\n";
+												return false;
+											break;
+											case Instruction::And:
+											case Instruction::Or:
+											case Instruction::Xor:
+												op1 = builder.CreateLShr(bin->getOperand(0), ConstantInt::get(bin->getType(), i));
+												op1 = builder.CreateAnd(op1, ConstantInt::get(bin->getType(), 1));
+												op1 = builder.CreateMul(op1, 
+																								ConstantInt::get(bin->getType(), 
+																													 			 cast<IntegerType>(bin->getType())->getBitMask()));
+											
+												newBin = builder.CreateBinOp(bin->getOpcode(), op1, op2);
+												BinaryOpInstBuff.push_back(newBin);
+											break;
+											default:
+											break;
+										}		
 								}
 							}
 						
@@ -2271,10 +2441,86 @@ namespace{
 						if(auto *st = dyn_cast<StoreInst>(&I)){
 						}
 					*/
+
 						} //getMetadata
 					} //I : B
 				} //B : F
 			} //F : M
+			
+			/*
+			for(auto *sh : ShiftInstList){
+				IRBuilder<> builder(sh);
+				LLVMContext &Context = sh->getModule()->getContext();
+				
+				
+				Instruction *opInst = cast<Instruction>(sh->getOperand(0));
+				Value *shiftGEP;
+				for(; !isa<GetElementPtrInst>(opInst); opInst = cast<Instruction>(sh->getOperand(0))){
+					if(isa<GetElementPtrInst>(opInst->getOperand(0))){
+						shiftGEP = opInst->getOperand(0);
+						break;
+					}
+				}
+				
+				for(auto *gepPtr : GEPInstBuff){
+					
+				}
+				
+				std::vector<Value *> IdxList;
+				Type *idxTy = IntegerType::getInt64Ty(Context);
+				Value *idxZero = ConstantInt::get(idxTy, 0);
+				IdxList.push_back(idxZero);
+				IdxList.push_back(shiftGEP->getOperand(2)); //index of the first slice
+				Type *sliceTy = IntegerType::getInt32Ty(Context);
+				AllocaInst *idxAlloca = builder.CreateAlloca(idxTy, 0, "forIdx");
+				builder.CreateStore(idxZero, idxAlloca);
+				BasicBlock *forEnd = sh->getParent()->splitBasicBlock(sh, "for.end");
+				BasicBlock *forCond = BasicBlock::Create(Context, "for.cond", sh->getFunction(), forEnd);
+				idxAlloca->getParent()->getTerminator()->setSuccessor(0, forCond);
+				
+				IRBuilder<> forCondBuilder(forCond);
+				Value *idx = forCondBuilder.CreateLoad(idxAlloca);
+				Value *cmp = forCondBuilder.CreateICmpSLT(idx, ConstantInt::get(idxTy, 8), "cmp");
+				BasicBlock *forBody = BasicBlock::Create(Context, "for.body", sh->getFunction(), forEnd);
+				forCondBuilder.CreateCondBr(cmp, forBody, forEnd);
+				
+				IRBuilder<> forBodyBuilder(forBody);
+				BasicBlock *ifEnd = forBody->splitBasicBlock(forBody->getTerminator(), "if.end");
+				BasicBlock *ifThen = BasicBlock::Create(Context, "if.then", sh->getFunction, ifEnd);
+				BasicBlock *ifElse = BasicBlock::Create(Context, "if.else", sh->getFunction, ifElse);
+				Value *cmp = forBodyBuilder.CreateICmpSLT(idx, sh->getOperand(1), "cmp");
+				forBodyBuilder.CreateCondBr(cmp, ifThen, ifElse);
+				
+				IRBuilder<> ifThenBuilder(ifThen);
+				ifThenBuilder.CreateStore(shiftGEP, ConstantInt::get(sliceTy, 0));
+				ifThenBuilder.CreateBr(ifEnd);
+				
+				IRBuilder<> ifElseBuilder(ifElse);
+				Value *subIdx = ifElseBuilder.CreateNSWSub(idx, sh->getOperand(1)); //FIXME:In case the chosen shift is wrong? (negative or something)
+				IdxList.at(1) = subIdx;
+				Value *srcGEP = ifElseBuilder.CreateInBoundsGEP(shiftGEP->getPointerOperand(), 
+																												ArrayRef <Value *>(IdxList));
+				Value *shLoad = ifElseBuilder.CreateLoad(srcGEP);
+				
+			//	ifElseBuilder.CreateStore(shLoad, shiftGEP);
+				ifElseBuilder.CreateBr(ifEnd);
+				
+				IRBuilder<> ifEndBuilder(ifEnd);
+				
+
+				switch(sh->getOpcode()){
+					case Instruction::Shl:
+					break;
+					case Instruction::LShr:
+					break;
+					case Instruction::AShr:
+					break;
+					default:
+					break;
+				}				
+			}
+			*/
+			
 		/*	
 			for(auto &SSP: startSplitPoints){
 				StringRef StartName = cast<ConstantDataSequential>(cast<User>(cast<User>(SSP->getArgOperand(0))
